@@ -1,2 +1,3 @@
 data/
 faiss_artifacts/
+.env
