@@ -5,3 +5,5 @@ faiss-cpu
 neo4j
 python-dotenv
 setuptools
+azure-identity
+azure-storage-blob

@@ -3,3 +3,4 @@ faiss_artifacts/
 .env
 __pycache__
 *.egg-info
+artifacts/
