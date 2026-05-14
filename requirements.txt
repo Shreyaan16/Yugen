@@ -4,3 +4,4 @@ scikit-learn
 faiss-cpu
 neo4j
 python-dotenv
+setuptools
