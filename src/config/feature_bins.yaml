@@ -1,0 +1,11 @@
+ep_bin:
+  bins: [0, 1, 13, 26, 52, 100, .inf]
+  labels: [movie_ova, short, one_cour, two_cour, long, ongoing]
+
+dur_bin:
+  bins: [0, 10, 30, 60, .inf]
+  labels: [short_form, standard, ova_length, movie_length]
+
+era:
+  bins: [0, 1989, 1999, 2009, 2019, .inf]
+  labels: [classic, "90s", "2000s", "2010s", "2020s"]
