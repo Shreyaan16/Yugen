@@ -11,3 +11,17 @@ class DataPreprocessingArtifact:
     train_data_dir: str
     test_data_dir: str
     val_data_dir: str
+
+@dataclass
+class ContentBasedRecommenderArtifact:
+    content_based_dir: str
+    index_path: str
+    mal_to_faiss_path: str
+    faiss_to_mal_path: str
+
+@dataclass
+class UserBasedRecommenderArtifact:
+    user_based_dir: str
+    index_path: str
+    user_id_to_faiss_path: str
+    user_id_to_vector_path: str

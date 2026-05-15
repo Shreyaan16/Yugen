@@ -1,4 +1,4 @@
 from src.pipeline import TrainingPipeline
 
 pipeline = TrainingPipeline()
-pipeline.run()
+content_artifact, user_artifact = pipeline.run()
