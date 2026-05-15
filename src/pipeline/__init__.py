@@ -28,18 +28,18 @@ class TrainingPipeline:
 
     def run(self):
         data_ingestion = DataIngestion(self.data_ingestion_config)
-        # data_ingestion.run()
+        data_ingestion.run()
 
         data_preprocessing = DataPreprocessing(self.data_preprocessing_config)
-        # data_preprocessing_artifact = data_preprocessing.run()
+        data_preprocessing_artifact = data_preprocessing.run()
 
         train_df = pd.read_csv(os.path.join(self.data_preprocessing_config.train_data_dir, SPLIT_FILE_NAME))
         content_recommender = ContentBasedRecommender(self.content_based_config)
-        # content_artifact = content_recommender.run(train_df)
+        content_artifact = content_recommender.run(train_df)
 
         ratings_df = pd.read_csv(os.path.join(self.data_preprocessing_config.train_data_dir, RATINGS_SPLIT_FILE_NAME))
         user_recommender = UserBasedRecommender(self.user_based_config)
-        # user_artifact = user_recommender.run(ratings_df, content_artifact)
+        user_artifact = user_recommender.run(ratings_df, content_artifact)
 
         anime_df = pd.read_csv(
             os.path.join(self.data_preprocessing_config.raw_data_dir, ANIME_FILE_NAME),

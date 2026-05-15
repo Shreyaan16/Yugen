@@ -57,6 +57,18 @@ HYBRID_DIR_NAME: str = "hybrid"
 HYBRID_SIMILAR_USERS_K: int = 50
 HYBRID_TOP_K: int = 10
 HYBRID_RATINGS_MATRIX_FILE: str = "ratings_csr.npz"
+
+###################### EVALUATION ############################
+EVALUATION_DIR_NAME: str = "evaluation"
+EVAL_TOP_K: int = 10
+EVAL_SIMILAR_USERS_K: int = 50
+EVAL_RELEVANT_THRESHOLD: float = 7.0
+EVAL_CONTENT_NEIGHBORS_K: int = 10
+EVAL_CONTENT_SAMPLE_SIZE: int = 2000
+EVAL_HYBRID_METRICS_FILE: str = "hybrid_metrics.json"
+EVAL_CONTENT_METRICS_FILE: str = "content_metrics.json"
+EVAL_USER_METRICS_FILE: str = "user_metrics.json"
+EVAL_SUMMARY_FILE: str = "summary.json"
 SPLIT_FILE_NAME: str = "data.csv"
 RATINGS_SPLIT_FILE_NAME: str = "ratings.csv"
 ANIME_FILE_NAME: str = "anime.csv"

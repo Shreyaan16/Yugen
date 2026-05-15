@@ -48,3 +48,14 @@ class HybridRecommenderConfig:
     hybrid_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, HYBRID_DIR_NAME)
     similar_users_k: int = HYBRID_SIMILAR_USERS_K
     top_k: int = HYBRID_TOP_K
+
+
+@dataclass
+class EvaluationConfig:
+    evaluation_dir: str = os.path.join(training_pipeline_config.artifact_dir, EVALUATION_DIR_NAME)
+    top_k: int = EVAL_TOP_K
+    similar_users_k: int = EVAL_SIMILAR_USERS_K
+    relevant_threshold: float = EVAL_RELEVANT_THRESHOLD
+    content_neighbors_k: int = EVAL_CONTENT_NEIGHBORS_K
+    content_sample_size: int = EVAL_CONTENT_SAMPLE_SIZE
+    random_state: int = RANDOM_STATE

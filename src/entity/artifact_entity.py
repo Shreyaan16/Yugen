@@ -30,3 +30,11 @@ class UserBasedRecommenderArtifact:
 class HybridRecommenderArtifact:
     hybrid_dir: str
     ratings_matrix_path: str
+
+@dataclass
+class EvaluationArtifact:
+    split_dir: str
+    hybrid_metrics_path: str
+    content_metrics_path: str
+    user_metrics_path: str
+    summary_path: str

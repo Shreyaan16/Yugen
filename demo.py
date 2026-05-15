@@ -49,7 +49,7 @@ hybrid_cfg = HybridRecommenderConfig()
 # ============================================================
 
 # --- RUN ---
-# DataIngestion(ingestion_cfg).run()
+DataIngestion(ingestion_cfg).run()
 
 
 # ============================================================
@@ -57,7 +57,7 @@ hybrid_cfg = HybridRecommenderConfig()
 # ============================================================
 
 # --- RUN ---
-# DataPreprocessing(preprocessing_cfg).run()
+DataPreprocessing(preprocessing_cfg).run()
 
 
 # ============================================================
@@ -65,17 +65,17 @@ hybrid_cfg = HybridRecommenderConfig()
 # ============================================================
 
 # --- RUN ---
-# train_df = pd.read_csv(os.path.join(preprocessing_cfg.train_data_dir, SPLIT_FILE_NAME))
-# content_artifact = ContentBasedRecommender(content_cfg).run(train_df)
-# print(content_artifact)
+train_df = pd.read_csv(os.path.join(preprocessing_cfg.train_data_dir, SPLIT_FILE_NAME))
+content_artifact = ContentBasedRecommender(content_cfg).run(train_df)
+print(content_artifact)
 
 # --- LOAD ---
-content_artifact = ContentBasedRecommenderArtifact(
-    content_based_dir=content_cfg.content_based_dir,
-    index_path=os.path.join(content_cfg.content_based_dir, CONTENT_INDEX_FILE),
-    mal_to_faiss_path=os.path.join(content_cfg.content_based_dir, CONTENT_MAL_TO_FAISS_FILE),
-    faiss_to_mal_path=os.path.join(content_cfg.content_based_dir, CONTENT_FAISS_TO_MAL_FILE),
-)
+# content_artifact = ContentBasedRecommenderArtifact(
+#     content_based_dir=content_cfg.content_based_dir,
+#     index_path=os.path.join(content_cfg.content_based_dir, CONTENT_INDEX_FILE),
+#     mal_to_faiss_path=os.path.join(content_cfg.content_based_dir, CONTENT_MAL_TO_FAISS_FILE),
+#     faiss_to_mal_path=os.path.join(content_cfg.content_based_dir, CONTENT_FAISS_TO_MAL_FILE),
+# )
 
 
 # ============================================================
@@ -83,17 +83,17 @@ content_artifact = ContentBasedRecommenderArtifact(
 # ============================================================
 
 # --- RUN ---
-# ratings_df = pd.read_csv(os.path.join(preprocessing_cfg.train_data_dir, RATINGS_SPLIT_FILE_NAME))
-# user_artifact = UserBasedRecommender(user_cfg).run(ratings_df, content_artifact)
-# print(user_artifact)
+ratings_df = pd.read_csv(os.path.join(preprocessing_cfg.train_data_dir, RATINGS_SPLIT_FILE_NAME))
+user_artifact = UserBasedRecommender(user_cfg).run(ratings_df, content_artifact)
+print(user_artifact)
 
 # --- LOAD ---
-user_artifact = UserBasedRecommenderArtifact(
-    user_based_dir=user_cfg.user_based_dir,
-    index_path=os.path.join(user_cfg.user_based_dir, USER_INDEX_FILE),
-    user_id_to_faiss_path=os.path.join(user_cfg.user_based_dir, USER_ID_TO_FAISS_FILE),
-    user_id_to_vector_path=os.path.join(user_cfg.user_based_dir, USER_ID_TO_VECTOR_FILE),
-)
+# user_artifact = UserBasedRecommenderArtifact(
+#     user_based_dir=user_cfg.user_based_dir,
+#     index_path=os.path.join(user_cfg.user_based_dir, USER_INDEX_FILE),
+#     user_id_to_faiss_path=os.path.join(user_cfg.user_based_dir, USER_ID_TO_FAISS_FILE),
+#     user_id_to_vector_path=os.path.join(user_cfg.user_based_dir, USER_ID_TO_VECTOR_FILE),
+# )
 
 
 # ============================================================
@@ -109,22 +109,44 @@ anime_titles: dict[int, str] = {
 }
 
 # --- RUN ---
-# hybrid_artifact = HybridRecommender(hybrid_cfg).run(
-#     ratings_df, content_artifact, user_artifact, anime_titles
-# )
-# print(hybrid_artifact)
+hybrid_artifact = HybridRecommender(hybrid_cfg).run(
+    ratings_df, content_artifact, user_artifact, anime_titles
+)
+print(hybrid_artifact)
 
 # --- LOAD ---
-hybrid_artifact = HybridRecommenderArtifact(
-    hybrid_dir=hybrid_cfg.hybrid_dir,
-    ratings_matrix_path=os.path.join(hybrid_cfg.hybrid_dir, HYBRID_RATINGS_MATRIX_FILE),
-)
+# hybrid_artifact = HybridRecommenderArtifact(
+#     hybrid_dir=hybrid_cfg.hybrid_dir,
+#     ratings_matrix_path=os.path.join(hybrid_cfg.hybrid_dir, HYBRID_RATINGS_MATRIX_FILE),
+# )
 
 
 # ============================================================
-# Step 6: Try a recommendation 
+# Step 6: Try a recommendation
 # ============================================================
 hybrid = HybridRecommender(hybrid_cfg).load(
     content_artifact, user_artifact, hybrid_artifact, anime_titles
 )
 print(hybrid.recommend(user_id=0, top_k=10))
+
+
+# ============================================================
+# Step 7: Evaluation on val then test
+# ============================================================
+from src.entity.config_entity import EvaluationConfig
+from src.components.evaluation import Evaluation
+
+eval_cfg = EvaluationConfig()
+train_anime_df = pd.read_csv(os.path.join(preprocessing_cfg.train_data_dir, SPLIT_FILE_NAME))
+
+evaluator = Evaluation(
+    eval_cfg, content_artifact, user_artifact, hybrid_artifact, train_anime_df
+)
+
+val_ratings_df = pd.read_csv(os.path.join(preprocessing_cfg.val_data_dir, RATINGS_SPLIT_FILE_NAME))
+val_artifact = evaluator.run("val", val_ratings_df)
+print(val_artifact)
+
+test_ratings_df = pd.read_csv(os.path.join(preprocessing_cfg.test_data_dir, RATINGS_SPLIT_FILE_NAME))
+test_artifact = evaluator.run("test", test_ratings_df)
+print(test_artifact)
