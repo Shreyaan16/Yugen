@@ -1,0 +1,81 @@
+stages:
+  ingest:
+    cmd: python -m scripts.run_ingest
+    deps:
+      - src/components/data_ingestion.py
+      - src/constants/__init__.py
+      - scripts/run_ingest.py
+    outs:
+      - artifacts/data_ingestion
+
+  preprocess:
+    cmd: python -m scripts.run_preprocess
+    deps:
+      - artifacts/data_ingestion
+      - src/components/data_preprocessing.py
+      - src/config/cols_to_drop.yaml
+      - src/config/feature_bins.yaml
+      - scripts/run_preprocess.py
+    params:
+      - data_preprocessing
+    outs:
+      - artifacts/data_preprocessing
+
+  content:
+    cmd: python -m scripts.run_content
+    deps:
+      - artifacts/data_preprocessing/train_data/data.csv
+      - src/components/recommender.py
+      - scripts/run_content.py
+    params:
+      - content_based
+    outs:
+      - artifacts/recommender/content_based
+
+  user:
+    cmd: python -m scripts.run_user
+    deps:
+      - artifacts/recommender/content_based
+      - artifacts/data_preprocessing/train_data/ratings.csv
+      - src/components/recommender.py
+      - scripts/run_user.py
+    params:
+      - user_based
+    outs:
+      - artifacts/recommender/user_based
+
+  hybrid:
+    cmd: python -m scripts.run_hybrid
+    deps:
+      - artifacts/recommender/content_based
+      - artifacts/recommender/user_based
+      - artifacts/data_preprocessing/train_data/ratings.csv
+      - artifacts/data_ingestion/anime.csv
+      - src/components/recommender.py
+      - scripts/run_hybrid.py
+    params:
+      - hybrid
+    outs:
+      - artifacts/recommender/hybrid
+
+  evaluate:
+    cmd: python -m scripts.run_evaluate
+    deps:
+      - artifacts/recommender/content_based
+      - artifacts/recommender/user_based
+      - artifacts/recommender/hybrid
+      - artifacts/data_preprocessing/val_data/ratings.csv
+      - artifacts/data_preprocessing/test_data/ratings.csv
+      - artifacts/data_preprocessing/train_data/data.csv
+      - src/components/evaluation.py
+      - src/tracker.py
+      - scripts/run_evaluate.py
+    params:
+      - evaluation
+    metrics:
+      - artifacts/evaluation/val/summary.json:
+          cache: false
+      - artifacts/evaluation/test/summary.json:
+          cache: false
+    outs:
+      - artifacts/evaluation

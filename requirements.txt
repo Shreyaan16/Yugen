@@ -1,9 +1,13 @@
 pandas
 numpy
-scikit-learn    
+scikit-learn
 faiss-cpu
 neo4j
 python-dotenv
 setuptools
 azure-identity
 azure-storage-blob
+scipy
+PyYAML
+mlflow
+dvc[azure]

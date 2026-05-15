@@ -97,10 +97,10 @@ class DataPreprocessing:
         return df.drop(columns=["Aired", "Premiered"])
 
     def _split(self, df: pd.DataFrame):
-        df = df.sample(frac=1, random_state=RANDOM_STATE).reset_index(drop=True)
+        df = df.sample(frac=1, random_state=self.config.random_state).reset_index(drop=True)
         n = len(df)
-        n_train = int(n * TRAIN_RATIO)
-        n_val = int(n * VAL_RATIO)
+        n_train = int(n * self.config.train_ratio)
+        n_val = int(n * self.config.val_ratio)
         train = df.iloc[:n_train]
         val = df.iloc[n_train : n_train + n_val]
         test = df.iloc[n_train + n_val :]

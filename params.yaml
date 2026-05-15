@@ -1,0 +1,28 @@
+data_preprocessing:
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  random_state: 42
+
+content_based:
+  max_features: 15000
+  n_components: 256
+  hnsw_m: 32
+  ef_construction: 200
+  random_state: 42
+
+user_based:
+  hnsw_m: 32
+  ef_construction: 200
+
+hybrid:
+  similar_users_k: 50
+  top_k: 10
+
+evaluation:
+  top_k: 10
+  similar_users_k: 50
+  relevant_threshold: 7.0
+  content_neighbors_k: 10
+  content_sample_size: 2000
+  random_state: 42
