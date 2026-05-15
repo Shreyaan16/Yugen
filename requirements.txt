@@ -10,4 +10,4 @@ azure-storage-blob
 scipy
 PyYAML
 mlflow
-dvc[azure]
+dvc-azure

@@ -4,3 +4,4 @@ faiss_artifacts/
 __pycache__
 *.egg-info
 artifacts/
+mlruns/
