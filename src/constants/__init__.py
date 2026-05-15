@@ -52,6 +52,11 @@ USER_EF_CONSTRUCTION: int = 200
 USER_INDEX_FILE: str = "user_faiss_index.bin"
 USER_ID_TO_FAISS_FILE: str = "user_id_to_faiss_id.json"
 USER_ID_TO_VECTOR_FILE: str = "user_id_to_vector.json"
+
+HYBRID_DIR_NAME: str = "hybrid"
+HYBRID_SIMILAR_USERS_K: int = 50
+HYBRID_TOP_K: int = 10
+HYBRID_RATINGS_MATRIX_FILE: str = "ratings_csr.npz"
 SPLIT_FILE_NAME: str = "data.csv"
 RATINGS_SPLIT_FILE_NAME: str = "ratings.csv"
 ANIME_FILE_NAME: str = "anime.csv"

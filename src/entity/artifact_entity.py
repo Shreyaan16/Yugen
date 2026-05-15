@@ -25,3 +25,8 @@ class UserBasedRecommenderArtifact:
     index_path: str
     user_id_to_faiss_path: str
     user_id_to_vector_path: str
+
+@dataclass
+class HybridRecommenderArtifact:
+    hybrid_dir: str
+    ratings_matrix_path: str

@@ -41,3 +41,10 @@ class UserBasedRecommenderConfig:
     user_based_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, USER_BASED_DIR_NAME)
     hnsw_m: int = USER_HNSW_M
     ef_construction: int = USER_EF_CONSTRUCTION
+
+
+@dataclass
+class HybridRecommenderConfig:
+    hybrid_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, HYBRID_DIR_NAME)
+    similar_users_k: int = HYBRID_SIMILAR_USERS_K
+    top_k: int = HYBRID_TOP_K

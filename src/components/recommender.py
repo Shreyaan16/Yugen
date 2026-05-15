@@ -7,6 +7,8 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 
+from scipy.sparse import csr_matrix, save_npz, load_npz
+
 from src.constants import (
     CONTENT_INDEX_FILE,
     CONTENT_MAL_TO_FAISS_FILE,
@@ -14,9 +16,18 @@ from src.constants import (
     USER_INDEX_FILE,
     USER_ID_TO_FAISS_FILE,
     USER_ID_TO_VECTOR_FILE,
+    HYBRID_RATINGS_MATRIX_FILE,
 )
-from src.entity.config_entity import ContentBasedRecommenderConfig, UserBasedRecommenderConfig
-from src.entity.artifact_entity import ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact
+from src.entity.config_entity import (
+    ContentBasedRecommenderConfig,
+    UserBasedRecommenderConfig,
+    HybridRecommenderConfig,
+)
+from src.entity.artifact_entity import (
+    ContentBasedRecommenderArtifact,
+    UserBasedRecommenderArtifact,
+    HybridRecommenderArtifact,
+)
 
 
 class ContentBasedRecommender:
@@ -240,3 +251,131 @@ class UserBasedRecommender:
                 "similarity": np.round(sim_scores, 3),
             }
         ).reset_index(drop=True)
+
+
+class HybridRecommender:
+    def __init__(self, config: HybridRecommenderConfig | None = None):
+        self.config = config or HybridRecommenderConfig()
+        self.similar_users_k = self.config.similar_users_k
+        self.top_k = self.config.top_k
+
+        self.ratings_csr: csr_matrix | None = None
+        self.user_index: faiss.Index | None = None
+        self.mal_id_to_aidx: dict[int, int] = {}
+        self.aidx_to_mal_id: dict[int, int] = {}
+        self.user_id_to_uidx: dict[int, int] = {}
+        self.anime_titles: dict[int, str] = {}
+
+    def _load_maps(
+        self,
+        content_artifact: ContentBasedRecommenderArtifact,
+        user_artifact: UserBasedRecommenderArtifact,
+    ) -> None:
+        with open(content_artifact.mal_to_faiss_path, "r", encoding="utf-8") as f:
+            self.mal_id_to_aidx = {int(k): int(v) for k, v in json.load(f).items()}
+        self.aidx_to_mal_id = {v: k for k, v in self.mal_id_to_aidx.items()}
+
+        with open(user_artifact.user_id_to_faiss_path, "r", encoding="utf-8") as f:
+            self.user_id_to_uidx = {int(k): int(v) for k, v in json.load(f).items()}
+
+        self.user_index = faiss.read_index(user_artifact.index_path)
+
+    def fit(
+        self,
+        ratings_df: pd.DataFrame,
+        content_artifact: ContentBasedRecommenderArtifact,
+        user_artifact: UserBasedRecommenderArtifact,
+        anime_titles: dict[int, str] | None = None,
+    ) -> "HybridRecommender":
+        self._load_maps(content_artifact, user_artifact)
+        self.anime_titles = anime_titles or {}
+
+        df = ratings_df[ratings_df["rating"] > 0]
+        df = df[df["anime_id"].isin(self.mal_id_to_aidx)]
+        df = df[df["user_id"].isin(self.user_id_to_uidx)]
+
+        rows = df["user_id"].map(self.user_id_to_uidx).to_numpy()
+        cols = df["anime_id"].map(self.mal_id_to_aidx).to_numpy()
+        data = df["rating"].to_numpy(dtype="float32") / 10.0
+
+        n_users = len(self.user_id_to_uidx)
+        n_anime = len(self.mal_id_to_aidx)
+        self.ratings_csr = csr_matrix((data, (rows, cols)), shape=(n_users, n_anime))
+        return self
+
+    def save(self) -> HybridRecommenderArtifact:
+        assert self.ratings_csr is not None
+        out_dir = self.config.hybrid_dir
+        os.makedirs(out_dir, exist_ok=True)
+
+        ratings_matrix_path = os.path.join(out_dir, HYBRID_RATINGS_MATRIX_FILE)
+        save_npz(ratings_matrix_path, self.ratings_csr)
+
+        return HybridRecommenderArtifact(
+            hybrid_dir=out_dir,
+            ratings_matrix_path=ratings_matrix_path,
+        )
+
+    def load(
+        self,
+        content_artifact: ContentBasedRecommenderArtifact,
+        user_artifact: UserBasedRecommenderArtifact,
+        hybrid_artifact: HybridRecommenderArtifact,
+        anime_titles: dict[int, str] | None = None,
+    ) -> "HybridRecommender":
+        self._load_maps(content_artifact, user_artifact)
+        self.ratings_csr = load_npz(hybrid_artifact.ratings_matrix_path)
+        self.anime_titles = anime_titles or {}
+        return self
+
+    def run(
+        self,
+        ratings_df: pd.DataFrame,
+        content_artifact: ContentBasedRecommenderArtifact,
+        user_artifact: UserBasedRecommenderArtifact,
+        anime_titles: dict[int, str] | None = None,
+    ) -> HybridRecommenderArtifact:
+        self.fit(ratings_df, content_artifact, user_artifact, anime_titles)
+        return self.save()
+
+    def recommend(
+        self,
+        user_id: int,
+        top_k: int | None = None,
+        k_users: int | None = None,
+    ) -> pd.DataFrame:
+        assert self.ratings_csr is not None and self.user_index is not None
+        top_k = top_k or self.top_k
+        k_users = k_users or self.similar_users_k
+
+        user_id = int(user_id)
+        if user_id not in self.user_id_to_uidx:
+            raise KeyError(f"user {user_id} not in index")
+
+        uidx = self.user_id_to_uidx[user_id]
+        query_vec = self.user_index.reconstruct(uidx).reshape(1, -1)
+
+        sims, peers = self.user_index.search(query_vec, k_users + 1)
+        mask = peers[0] != uidx
+        peer_idx = peers[0][mask][:k_users]
+        peer_sim = sims[0][mask][:k_users].astype("float32")
+
+        scores = peer_sim @ self.ratings_csr[peer_idx]
+        scores = np.asarray(scores).ravel()
+
+        support = np.asarray((self.ratings_csr[peer_idx] > 0).sum(axis=0)).ravel()
+
+        seen = self.ratings_csr.getrow(uidx).indices
+        scores[seen] = -np.inf
+
+        top = np.argpartition(-scores, top_k)[:top_k]
+        top = top[np.argsort(-scores[top])]
+
+        return pd.DataFrame(
+            {
+                "mal_id": [self.aidx_to_mal_id[i] for i in top],
+                "title": [self.anime_titles.get(self.aidx_to_mal_id[i], str(self.aidx_to_mal_id[i])) for i in top],
+                "score": scores[top],
+                "support": support[top],
+            }
+        )
