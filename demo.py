@@ -109,22 +109,22 @@ anime_titles: dict[int, str] = {
 }
 
 # --- RUN ---
-hybrid_artifact = HybridRecommender(hybrid_cfg).run(
-    ratings_df, content_artifact, user_artifact, anime_titles
-)
-print(hybrid_artifact)
+# hybrid_artifact = HybridRecommender(hybrid_cfg).run(
+#     ratings_df, content_artifact, user_artifact, anime_titles
+# )
+# print(hybrid_artifact)
 
 # --- LOAD ---
-# hybrid_artifact = HybridRecommenderArtifact(
-#     hybrid_dir=hybrid_cfg.hybrid_dir,
-#     ratings_matrix_path=os.path.join(hybrid_cfg.hybrid_dir, HYBRID_RATINGS_MATRIX_FILE),
-# )
+hybrid_artifact = HybridRecommenderArtifact(
+    hybrid_dir=hybrid_cfg.hybrid_dir,
+    ratings_matrix_path=os.path.join(hybrid_cfg.hybrid_dir, HYBRID_RATINGS_MATRIX_FILE),
+)
 
 
 # ============================================================
 # Step 6: Try a recommendation 
 # ============================================================
-# hybrid = HybridRecommender(hybrid_cfg).load(
-#     content_artifact, user_artifact, hybrid_artifact, anime_titles
-# )
-# print(hybrid.recommend(user_id=0, top_k=10))
+hybrid = HybridRecommender(hybrid_cfg).load(
+    content_artifact, user_artifact, hybrid_artifact, anime_titles
+)
+print(hybrid.recommend(user_id=0, top_k=10))
