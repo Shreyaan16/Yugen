@@ -13,10 +13,15 @@ mlflow
 dvc-azure
 fastapi
 uvicorn[standard]
-sqlalchemy>=2.0
+sqlalchemy
 alembic
 psycopg2-binary
 python-jose[cryptography]
 passlib[bcrypt]
+bcrypt<4
 python-multipart
 pydantic-settings
+email-validator
+pydantic
+fastapi
+uvicorn
