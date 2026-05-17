@@ -13,6 +13,7 @@ class RegisterSchema(BaseModel):
     username: str
     email: EmailStr
     password: str
+    favourite_genres: list[int]
 
 class LoginSchema(BaseModel):
     email: EmailStr

@@ -1,13 +1,15 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.orm import sessionmaker, declarative_base
-from api.constants import DATABASE_URL
+from api.constants import DATABASE_URL, TOP_K
 from jose import jwt
 import hashlib
 from datetime import datetime, timedelta
-from api.constants import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+from api.constants import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, UNKNOWN_GENRE_ID
 from api.models.authModels import User, RegisterSchema, LoginSchema
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
+
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -39,12 +41,50 @@ def register_user(user: RegisterSchema, db: Session):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    if not user.favourite_genres:
+        raise HTTPException(status_code=400, detail="Please select at least one favourite genre")
+
+    genre_ids = list({gid for gid in user.favourite_genres if gid != UNKNOWN_GENRE_ID})
+    if not genre_ids:
+        raise HTTPException(status_code=400, detail="Please select at least one valid genre")
+
+    valid_stmt = text(
+        "SELECT id FROM genres WHERE id IN :ids AND id <> :unknown"
+        ).bindparams(bindparam("ids", expanding=True))
+    valid_rows = db.execute(
+        valid_stmt,
+        {"ids": genre_ids, "unknown": UNKNOWN_GENRE_ID},
+    ).fetchall()
+    valid_ids = {row[0] for row in valid_rows}
+    invalid = set(genre_ids) - valid_ids
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid genre ids: {sorted(invalid)}")
+
+    top_anime_stmt = text(
+        """
+        SELECT DISTINCT a.id, a.title, a.synopsis, a.era, a.rating
+        FROM anime a
+        JOIN anime_genres ag ON ag.anime_id = a.id
+        WHERE ag.genre_id IN :ids
+        ORDER BY random()
+        LIMIT :k
+        """
+    ).bindparams(bindparam("ids", expanding=True))
+    top_anime = db.execute(
+        top_anime_stmt,
+        {"ids": list(valid_ids), "k": TOP_K},
+    ).mappings().all()
+
     new_user = User(username=user.username, email=user.email, password=hash_password(user.password))
 
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    return {"message": "User registered successfully"}
+    return {
+        "message": "User registered successfully",
+        "user_id": new_user.user_id,
+        "recommended_anime": [dict(row) for row in top_anime],
+    }
 
 
 def login_user(user: LoginSchema, db: Session):
