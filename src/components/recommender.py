@@ -140,6 +140,28 @@ class ContentBasedRecommender:
         results["similarity"] = np.round(sim_scores, 3)
         return results.reset_index(drop=True)
 
+    def recommend_by_mal_id(self, mal_id: int, n: int = 10) -> list[tuple[int, float]]:
+        """Return up to n (mal_id, similarity) pairs most similar to the given MAL_ID."""
+        assert self.index is not None, "Call fit() or load() first"
+        faiss_id = self.mal_id_to_faiss_id.get(int(mal_id))
+        if faiss_id is None:
+            return []
+
+        query_vec = self.embeddings[faiss_id : faiss_id + 1]
+        distances, indices = self.index.search(query_vec, n + 1)
+
+        out: list[tuple[int, float]] = []
+        for i, d in zip(indices[0], distances[0]):
+            if int(i) == faiss_id:
+                continue
+            mid = self.faiss_id_to_mal_id.get(int(i))
+            if mid is None:
+                continue
+            out.append((int(mid), float(d)))
+            if len(out) >= n:
+                break
+        return out
+
 
 class UserBasedRecommender:
     def __init__(self, config: UserBasedRecommenderConfig | None = None):
