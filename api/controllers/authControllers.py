@@ -1,13 +1,6 @@
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from api.constants import (
-    DATABASE_URL,
-    TOP_K,
-    SECRET_KEY,
-    ALGORITHM,
-    ACCESS_TOKEN_EXPIRE_MINUTES,
-    UNKNOWN_GENRE_ID,
-)
+from api.constants import *
 from jose import jwt
 import hashlib
 from datetime import datetime, timedelta
@@ -39,7 +32,6 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-
 def register_user(user: RegisterSchema, db: Session):
     existing_user = db.query(User).filter(User.email == user.email).first()
     if existing_user:
@@ -52,13 +44,8 @@ def register_user(user: RegisterSchema, db: Session):
     if not genre_ids:
         raise HTTPException(status_code=400, detail="Please select at least one valid genre")
 
-    valid_stmt = text(
-        "SELECT id FROM genres WHERE id IN :ids AND id <> :unknown"
-        ).bindparams(bindparam("ids", expanding=True))
-    valid_rows = db.execute(
-        valid_stmt,
-        {"ids": genre_ids, "unknown": UNKNOWN_GENRE_ID},
-    ).fetchall()
+    valid_stmt = text("SELECT id FROM genres WHERE id IN :ids AND id <> :unknown").bindparams(bindparam("ids", expanding=True))
+    valid_rows = db.execute(valid_stmt,{"ids": genre_ids, "unknown": UNKNOWN_GENRE_ID},).fetchall()
     valid_ids = {row[0] for row in valid_rows}
     invalid = set(genre_ids) - valid_ids
     if invalid:
@@ -77,16 +64,14 @@ def register_user(user: RegisterSchema, db: Session):
         LIMIT :k
         """
     ).bindparams(bindparam("ids", expanding=True))
-    top_anime = db.execute(
-        top_anime_stmt,
-        {"ids": list(valid_ids), "k": TOP_K},
-    ).mappings().all()
 
+    top_anime = db.execute(top_anime_stmt, {"ids": list(valid_ids), "k": TOP_K},).mappings().all()
     new_user = User(username=user.username, email=user.email, password=hash_password(user.password))
 
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    
     return {
         "message": "User registered successfully",
         "user_id": new_user.user_id,
