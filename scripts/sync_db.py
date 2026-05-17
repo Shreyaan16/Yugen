@@ -1,7 +1,8 @@
-"""Sync Postgres with the full anime catalogue (train+val+test).
+"""Sync Postgres with the full anime catalogue (train+val+test) and per-anime rating aggregates.
 
 Fixes a previous ingestion bug where only train-split anime/genres/studios/producers
 were pushed. Re-runs are safe: missing rows are inserted, existing rows are left alone.
+Aggregates from rating_complete.csv are stored in the `ratings` table (one row per anime).
 """
 
 import os
@@ -14,6 +15,8 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 PREP_DIR = "artifacts/data_preprocessing"
+RAW_RATINGS = "artifacts/data_ingestion/rating_complete.csv"
+POPULARITY_PRIOR_VOTES = 50  # Bayesian smoothing: anime need this many ratings to lean on their own mean
 
 
 def load_full_anime_df() -> pd.DataFrame:
@@ -163,9 +166,77 @@ def sync_anime_catalogue(engine) -> None:
         sync_join("anime_producers", "producer_id", producers_map, "Producers")
 
 
+def sync_rating_aggregates(engine) -> None:
+    print(f"[ratings] reading {RAW_RATINGS} ...", flush=True)
+    ratings = pd.read_csv(
+        RAW_RATINGS,
+        dtype={"user_id": "int32", "anime_id": "int32", "rating": "int16"},
+    )
+    print(f"[ratings] raw rows: {len(ratings):,}", flush=True)
+
+    agg = (
+        ratings.groupby("anime_id")["rating"]
+        .agg(num_ratings="count", mean_rating="mean")
+        .reset_index()
+    )
+    global_mean = agg["mean_rating"].mean()
+    m = POPULARITY_PRIOR_VOTES
+    agg["popularity_score"] = (
+        (agg["num_ratings"] / (agg["num_ratings"] + m)) * agg["mean_rating"]
+        + (m / (agg["num_ratings"] + m)) * global_mean
+    )
+    print(
+        f"[ratings] aggregated to {len(agg):,} anime (global mean={global_mean:.3f}, prior m={m})",
+        flush=True,
+    )
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS ratings (
+                    anime_id INTEGER PRIMARY KEY REFERENCES anime(id) ON DELETE CASCADE,
+                    num_ratings INTEGER NOT NULL,
+                    mean_rating DOUBLE PRECISION NOT NULL,
+                    popularity_score DOUBLE PRECISION NOT NULL
+                )
+                """
+            )
+        )
+        anime_ids = {r[0] for r in conn.execute(text("SELECT id FROM anime")).fetchall()}
+        before = len(agg)
+        agg = agg[agg["anime_id"].isin(anime_ids)]
+        print(
+            f"[ratings] kept {len(agg):,} rows whose anime_id is in DB (dropped {before - len(agg):,})",
+            flush=True,
+        )
+
+        conn.execute(text("TRUNCATE TABLE ratings"))
+        rows = [
+            {
+                "anime_id": int(r.anime_id),
+                "num_ratings": int(r.num_ratings),
+                "mean_rating": float(r.mean_rating),
+                "popularity_score": float(r.popularity_score),
+            }
+            for r in agg.itertuples(index=False)
+        ]
+        conn.execute(
+            text(
+                """
+                INSERT INTO ratings (anime_id, num_ratings, mean_rating, popularity_score)
+                VALUES (:anime_id, :num_ratings, :mean_rating, :popularity_score)
+                """
+            ),
+            rows,
+        )
+        print(f"[ratings] inserted {len(rows):,} aggregate rows", flush=True)
+
+
 def main() -> None:
     engine = create_engine(DATABASE_URL)
     sync_anime_catalogue(engine)
+    sync_rating_aggregates(engine)
     print("done.", flush=True)
 
 

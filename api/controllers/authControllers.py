@@ -66,12 +66,14 @@ def register_user(user: RegisterSchema, db: Session):
 
     top_anime_stmt = text(
         """
-        SELECT a.id, a.title, a.synopsis, a.era, a.rating
+        SELECT a.id, a.title, a.synopsis, a.era, a.rating,
+               r.num_ratings, r.mean_rating, r.popularity_score
         FROM anime a
+        JOIN ratings r ON r.anime_id = a.id
         WHERE a.id IN (
             SELECT DISTINCT anime_id FROM anime_genres WHERE genre_id IN :ids
         )
-        ORDER BY random()
+        ORDER BY r.popularity_score DESC, r.num_ratings DESC
         LIMIT :k
         """
     ).bindparams(bindparam("ids", expanding=True))
