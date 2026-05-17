@@ -1,19 +1,23 @@
 from sqlalchemy import create_engine, text, bindparam
-from sqlalchemy.orm import sessionmaker, declarative_base
-from api.constants import DATABASE_URL, TOP_K
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from api.constants import (
+    DATABASE_URL,
+    TOP_K,
+    SECRET_KEY,
+    ALGORITHM,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    UNKNOWN_GENRE_ID,
+)
 from jose import jwt
 import hashlib
 from datetime import datetime, timedelta
-from api.constants import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, UNKNOWN_GENRE_ID
-from api.models.authModels import User, RegisterSchema, LoginSchema
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
-
-
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+from api.models.authModels import User, RegisterSchema, LoginSchema  # noqa: E402  (Base must exist first)
 
 def get_db():
     db = SessionLocal()
@@ -62,10 +66,11 @@ def register_user(user: RegisterSchema, db: Session):
 
     top_anime_stmt = text(
         """
-        SELECT DISTINCT a.id, a.title, a.synopsis, a.era, a.rating
+        SELECT a.id, a.title, a.synopsis, a.era, a.rating
         FROM anime a
-        JOIN anime_genres ag ON ag.anime_id = a.id
-        WHERE ag.genre_id IN :ids
+        WHERE a.id IN (
+            SELECT DISTINCT anime_id FROM anime_genres WHERE genre_id IN :ids
+        )
         ORDER BY random()
         LIMIT :k
         """
