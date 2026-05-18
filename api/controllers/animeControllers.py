@@ -7,14 +7,7 @@ from jose import JWTError, jwt
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from api.constants import (
-    ALGORITHM,
-    ALL_ANIME_DEFAULT_LIMIT,
-    ALL_ANIME_MAX_LIMIT,
-    SECRET_KEY,
-    TOP_K,
-    TOP_K_SIMILAR,
-)
+from api.constants import *
 from api.controllers.authControllers import get_db
 from api.models.authModels import RateSchema, User, UserRating
 
@@ -22,11 +15,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=True)
 
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    creds_exc = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    creds_exc = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials", headers={"WWW-Authenticate": "Bearer"})
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         sub = payload.get("sub")
@@ -43,11 +32,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 
 def list_genres(db: Session) -> dict[str, Any]:
-    rows = db.execute(
-        text("SELECT id, genre_name FROM genres WHERE genre_name <> 'Unknown' ORDER BY genre_name")
-    ).mappings().all()
+    rows = db.execute(text("SELECT id, genre_name FROM genres WHERE genre_name <> 'Unknown' ORDER BY genre_name")).mappings().all()
     return {"items": [dict(r) for r in rows]}
-
 
 def list_all_anime(db: Session, limit: int, offset: int) -> dict[str, Any]:
     limit = max(1, min(limit, ALL_ANIME_MAX_LIMIT))
@@ -122,6 +108,7 @@ def get_anime_detail(anime_id: int, db: Session) -> dict[str, Any]:
             {"id": anime_id},
         ).fetchall()
     ]
+
     studios = [
         r[0]
         for r in db.execute(
@@ -135,6 +122,7 @@ def get_anime_detail(anime_id: int, db: Session) -> dict[str, Any]:
             {"id": anime_id},
         ).fetchall()
     ]
+
     producers = [
         r[0]
         for r in db.execute(
@@ -182,6 +170,7 @@ def rate_anime(payload: RateSchema, current_user: User, db: Session) -> dict[str
         action = "updated"
 
     db.commit()
+    
     db.refresh(existing)
     return {
         "message": f"Rating {action}",
