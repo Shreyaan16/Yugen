@@ -27,3 +27,4 @@ fastapi
 uvicorn
 matplotlib
 seaborn 
+scipy
