@@ -15,9 +15,12 @@ FEATURE_BINS_CONFIG: str = os.path.join(ROOT_DIR, "src", "config", "feature_bins
 
 ###################### AZURE ENV ############################
 CONNECTION_STRING: str = os.environ["CONNECTION_STRING"]
-CONTAINER_NAME: str = os.environ["CONTAINER_NAME"]
+CONTAINER_NAME: str = os.environ["V2_CONTAINER_NAME"]
 REGION: str = os.environ["REGION"]
 STORAGE_ACCOUNT_NAME: str = os.environ["STORAGE_ACCOUNT_NAME"]
+
+###################### POSTGRES ENV #########################
+DATABASE_URL: str = os.environ["DATABASE_URL"]
 
 ###################### DIR NAMES ############################
 DATA_INGESTION_DIR_NAME: str = "data_ingestion"
