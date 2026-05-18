@@ -6,18 +6,20 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from src.entity.artifact_entity import LoadingArtifact
+from src.entity.config_entity import LoadingConfig
+
 class Loading:
-    def __init__(self, pg_connection_string: str, azure_connection_string: str, azure_container_name: str):
-        self.pg_connection_string = pg_connection_string
-        self.azure_connection_string = azure_connection_string
-        self.azure_container_name = azure_container_name
+    def __init__(self, config: LoadingConfig):
+        self.config = config
         self._engine: Optional[Engine] = None
+        self._blob_service: Optional[BlobServiceClient] = None
 
     def connect(self) -> None:
-        self._engine = create_engine(self.pg_connection_string)
+        self._engine = create_engine(self.config.pg_connection_string)
 
-        self._blob_service = BlobServiceClient.from_connection_string(self.azure_connection_string)
-        container_client = self._blob_service.get_container_client(self.azure_container_name)
+        self._blob_service = BlobServiceClient.from_connection_string(self.config.azure_connection_string)
+        container_client = self._blob_service.get_container_client(self.config.azure_container_name)
         if not container_client.exists():
             container_client.create_container()
 
@@ -25,10 +27,11 @@ class Loading:
         if self._engine is not None:
             self._engine.dispose()
 
-    def export_table(self, table_name: str, schema: str = "public") -> str:
+    def export_table(self, table_name: str, schema: Optional[str] = None) -> str:
         self._ensure_connected()
 
-        qualified = f'"{schema}"."{table_name}"'
+        target_schema = schema or self.config.schema
+        qualified = f'"{target_schema}"."{table_name}"'
         blob_name = f"{table_name}.csv"
 
         df = pd.read_sql(f"SELECT * FROM {qualified}", self._engine)
@@ -53,21 +56,27 @@ class Loading:
         self._upload_blob(full_blob_name, buffer.getvalue())
         return full_blob_name
 
-    def export_all_tables(self, schema: str = "public",) -> list[str]:
+    def export_all_tables(self, schema: Optional[str] = None,) -> list[str]:
         self._ensure_connected()
 
-        tables = self._list_tables(schema)
+        target_schema = schema or self.config.schema
+        tables = self._list_tables(target_schema)
         tables = [t for t in tables]
 
         uploaded = []
         for table in tables:
             try:
-                blob_path = self.export_table(table, schema=schema)
+                blob_path = self.export_table(table, schema=target_schema)
                 uploaded.append(blob_path)
             except Exception as exc:
                 raise exc
+
             
         return uploaded
+
+    def run(self) -> LoadingArtifact:
+        uploaded = self.export_all_tables(schema=self.config.schema)
+        return LoadingArtifact(uploaded_blobs=uploaded)
 
     def __enter__(self):
         self.connect()
@@ -84,19 +93,22 @@ class Loading:
             raise RuntimeError("Azure client not initialised. Call connect() first.")
 
     def _list_tables(self, schema: str) -> list[str]:
-                query = text(
-                        """
-                        SELECT table_name
-                        FROM information_schema.tables
-                        WHERE table_schema = :schema
-                            AND table_type = 'BASE TABLE'
-                        ORDER BY table_name;
-                        """
-                )
-                with self._engine.connect() as conn:
-                        result = conn.execute(query, {"schema": schema})
-                        return [row[0] for row in result.fetchall()]
+        query = text(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = :schema
+              AND table_type = 'BASE TABLE'
+            ORDER BY table_name;
+            """
+        )
+        with self._engine.connect() as conn:
+            result = conn.execute(query, {"schema": schema})
+            return [row[0] for row in result.fetchall()]
 
     def _upload_blob(self, blob_name: str, data: str) -> None:
-        blob_client = self._blob_service.get_blob_client(container=self.azure_container_name, blob=blob_name,)
+        blob_client = self._blob_service.get_blob_client(
+            container=self.config.azure_container_name,
+            blob=blob_name,
+        )
         blob_client.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type="text/csv"))

@@ -4,6 +4,11 @@ from dataclasses import dataclass
 class DataIngestionArtifact:
     data_ingestion_dir: str
 
+
+@dataclass
+class LoadingArtifact:
+    uploaded_blobs: list[str]
+
 @dataclass
 class DataPreprocessingArtifact:
     data_preprocessing_dir: str

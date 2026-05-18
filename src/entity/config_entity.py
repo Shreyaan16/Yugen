@@ -28,6 +28,14 @@ class DataIngestionConfig:
 
 
 @dataclass
+class LoadingConfig:
+    pg_connection_string: str = DATABASE_URL
+    azure_connection_string: str = CONNECTION_STRING
+    azure_container_name: str = CONTAINER_NAME
+    schema: str = "public"
+
+
+@dataclass
 class DataPreprocessingConfig:
     data_preprocessing_dir: str = _data_preprocessing_dir
     raw_data_dir: str = os.path.join(training_pipeline_config.artifact_dir, RAW_DATA_DIR_NAME)
