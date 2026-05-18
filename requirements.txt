@@ -25,3 +25,5 @@ email-validator
 pydantic
 fastapi
 uvicorn
+matplotlib
+seaborn 
