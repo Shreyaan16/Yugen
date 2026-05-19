@@ -2,261 +2,301 @@ import json
 import os
 import numpy as np
 import pandas as pd
-import faiss
-from scipy.sparse import load_npz, csr_matrix
+from scipy.sparse import csr_matrix
+from sklearn.preprocessing import normalize
 
-from src.constants import (
-    EVAL_HYBRID_METRICS_FILE,
-    EVAL_CONTENT_METRICS_FILE,
-    EVAL_USER_METRICS_FILE,
-    EVAL_SUMMARY_FILE,
-)
-from src.entity.config_entity import EvaluationConfig
-from src.entity.artifact_entity import (
-    ContentBasedRecommenderArtifact,
-    UserBasedRecommenderArtifact,
-    HybridRecommenderArtifact,
-    EvaluationArtifact,
-)
-from src.components.recommender import HybridRecommender
+from src.constants import (EVAL_CF_METRICS_FILE, EVAL_HYBRID_METRICS_FILE, EVAL_SUMMARY_FILE)
+from src.entity.config_entity import (CFRecommenderConfig, EvaluationConfig, HybridRecommenderConfig,)
+from src.entity.artifact_entity import EvaluationArtifact
+from src.components.recommender import (ContentBasedRecommender, UserBasedRecommender, CFRecommender, HybridRecommender)
 
 
 class Evaluation:
-    def __init__(
-        self,
-        config: EvaluationConfig,
-        content_artifact: ContentBasedRecommenderArtifact,
-        user_artifact: UserBasedRecommenderArtifact,
-        hybrid_artifact: HybridRecommenderArtifact,
-        train_anime_df: pd.DataFrame,
-    ):
-        self.config = config
-        self.content_artifact = content_artifact
-        self.user_artifact = user_artifact
-        self.hybrid_artifact = hybrid_artifact
+    def __init__(self, config: EvaluationConfig | None = None):
+        self.config = config or EvaluationConfig()
+        os.makedirs(self.config.evaluation_dir, exist_ok=True)
 
-        self.content_index = faiss.read_index(content_artifact.index_path)
-        self.user_index = faiss.read_index(user_artifact.index_path)
-        self.ratings_csr: csr_matrix = load_npz(hybrid_artifact.ratings_matrix_path)
+        self.content: ContentBasedRecommender | None = None
+        self.user_based: UserBasedRecommender | None = None
+        self.cf: CFRecommender | None = None
+        self.hybrid: HybridRecommender | None = None
+        self.anime_df: pd.DataFrame | None = None
+        self.user_anime_ratings_df: pd.DataFrame | None = None
+        self.ratings_df: pd.DataFrame | None = None
 
-        with open(content_artifact.mal_to_faiss_path, "r", encoding="utf-8") as f:
-            self.mal_id_to_aidx = {int(k): int(v) for k, v in json.load(f).items()}
-        self.aidx_to_mal_id = {v: k for k, v in self.mal_id_to_aidx.items()}
+        self._cf_cfg = CFRecommenderConfig()
+        self._hy_cfg = HybridRecommenderConfig()
 
-        with open(user_artifact.user_id_to_faiss_path, "r", encoding="utf-8") as f:
-            self.user_id_to_uidx = {int(k): int(v) for k, v in json.load(f).items()}
+    def fit(self, content: ContentBasedRecommender, user_based: UserBasedRecommender, cf: CFRecommender,
+        hybrid: HybridRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame,
+        ratings_df: pd.DataFrame,) -> "Evaluation":
+        self.content = content
+        self.user_based = user_based
+        self.cf = cf
+        self.hybrid = hybrid
+        self.anime_df = anime_df
+        self.user_anime_ratings_df = user_anime_ratings_df
+        self.ratings_df = ratings_df
+        return self
 
-        self.hybrid = HybridRecommender.__new__(HybridRecommender)
-        self.hybrid.config = hybrid_artifact
-        self.hybrid.similar_users_k = config.similar_users_k
-        self.hybrid.top_k = config.top_k
-        self.hybrid.ratings_csr = self.ratings_csr
-        self.hybrid.user_index = self.user_index
-        self.hybrid.mal_id_to_aidx = self.mal_id_to_aidx
-        self.hybrid.aidx_to_mal_id = self.aidx_to_mal_id
-        self.hybrid.user_id_to_uidx = self.user_id_to_uidx
-        self.hybrid.anime_titles = {}
+    def _build_user_vec(self, train_ratings: pd.DataFrame) -> np.ndarray | None:
+        """Rebuild a user's TF-IDF-weighted vector from a subset of their ratings."""
+        anime_id_to_idx = self.content.anime_id_to_idx
+        tfidf_matrix = self.content.tfidf_matrix
 
-        self.genre_lookup: dict[int, set[str]] = {}
-        for mal_id, genres in zip(train_anime_df["MAL_ID"], train_anime_df["Genres"]):
-            if pd.isna(genres):
+        in_idx = train_ratings[train_ratings["anime_id"].isin(anime_id_to_idx)]
+        if len(in_idx) == 0:
+            return None
+
+        mean_r = in_idx["rating"].mean()
+        centered = (in_idx["rating"] - mean_r).astype(np.float32).values
+        anime_idxs = in_idx["anime_id"].map(anime_id_to_idx).values
+
+        n_anime = tfidf_matrix.shape[0]
+        row = csr_matrix(
+            (centered, (np.zeros(len(centered), dtype=np.int64), anime_idxs)),
+            shape=(1, n_anime),
+        )
+        user_vec_sparse = row @ tfidf_matrix
+        user_vec_sparse = normalize(user_vec_sparse, norm="l2", axis=1)
+        return user_vec_sparse.toarray().astype(np.float32)
+
+    def _cf_top_k(self, user_id: int, user_vec: np.ndarray, seen: set, k: int) -> list[int]:
+        ub = self.user_based
+        cfg = self._cf_cfg
+        self_idx = ub.user_id_to_idx.get(int(user_id))
+
+        sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
+        sims, nbr_idxs = sims[0], nbr_idxs[0]
+
+        neighbor_ids, neighbor_sims = [], []
+        for s, ni in zip(sims, nbr_idxs):
+            if ni == -1 or ni == ub.avg_idx or ni == self_idx:
                 continue
-            self.genre_lookup[int(mal_id)] = {g.strip() for g in str(genres).split(",")}
+            nid = ub.idx_to_user_id.get(int(ni))
+            if nid is None:
+                continue
+            neighbor_ids.append(nid)
+            neighbor_sims.append(float(s))
+            if len(neighbor_ids) == cfg.k_neighbors:
+                break
+        if not neighbor_ids:
+            return []
+
+        sim_map = dict(zip(neighbor_ids, neighbor_sims))
+        uar = self.user_anime_ratings_df
+        nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
+        if len(nbr) == 0:
+            return []
+        nbr["sim"] = nbr["user_id"].map(sim_map)
+
+        # Center each neighbor's rating against their own mean (over all their ratings),
+        # so the score reflects "lift above this user's personal baseline" rather than
+        # raw rating level. Avoids the score collapsing onto globally-popular anime.
+        neighbor_means = uar[uar["user_id"].isin(sim_map)].groupby("user_id")["rating"].mean()
+        nbr["centered"] = nbr["rating"] - nbr["user_id"].map(neighbor_means)
+        nbr["w_centered"] = nbr["centered"] * nbr["sim"]
+
+        agg = nbr.groupby("anime_id").agg(
+            num_neighbors=("user_id", "size"),
+            weighted_sum=("w_centered", "sum"),
+            sim_sum=("sim", "sum"),
+        )
+        agg = agg[agg["num_neighbors"] >= cfg.min_support]
+        if len(agg) == 0:
+            return []
+        agg["score"] = agg["weighted_sum"] / agg["sim_sum"]
+
+        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
+            reliable = set(
+                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
+            )
+            agg = agg[agg.index.isin(reliable)]
+
+        return agg["score"].sort_values(ascending=False).head(k).index.tolist()
+
+    def _hybrid_top_k(self, user_id: int, user_vec: np.ndarray, seen: set, k: int) -> list[int]:
+        cb = self.content
+        ub = self.user_based
+        cfg = self._hy_cfg
+        self_idx = ub.user_id_to_idx.get(int(user_id))
+
+        sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
+        sims, nbr_idxs = sims[0], nbr_idxs[0]
+        neighbor_ids, neighbor_sims = [], []
+        for s, ni in zip(sims, nbr_idxs):
+            if ni == -1 or ni == ub.avg_idx or ni == self_idx:
+                continue
+            nid = ub.idx_to_user_id.get(int(ni))
+            if nid is None:
+                continue
+            neighbor_ids.append(nid)
+            neighbor_sims.append(float(s))
+            if len(neighbor_ids) == cfg.k_neighbors:
+                break
+
+        cf_scores = pd.Series(dtype="float32", name="cf_score")
+        if neighbor_ids:
+            sim_map = dict(zip(neighbor_ids, neighbor_sims))
+            uar = self.user_anime_ratings_df
+            nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
+            if len(nbr) > 0:
+                nbr["sim"] = nbr["user_id"].map(sim_map)
+                neighbor_means = uar[uar["user_id"].isin(sim_map)].groupby("user_id")["rating"].mean()
+                nbr["centered"] = nbr["rating"] - nbr["user_id"].map(neighbor_means)
+                nbr["w_centered"] = nbr["centered"] * nbr["sim"]
+                agg = nbr.groupby("anime_id").agg(
+                    num_neighbors=("user_id", "size"),
+                    weighted_sum=("w_centered", "sum"),
+                    sim_sum=("sim", "sum"),
+                )
+                agg = agg[agg["num_neighbors"] >= cfg.min_support]
+                cf_scores = (agg["weighted_sum"] / agg["sim_sum"]).rename("cf_score")
+
+        c_scores_raw, c_idxs = cb.index.search(user_vec, cfg.content_pool)
+        c_scores_raw, c_idxs = c_scores_raw[0], c_idxs[0]
+        rows = []
+        for s, ai in zip(c_scores_raw, c_idxs):
+            if ai == -1:
+                continue
+            aid = cb.idx_to_anime_id[int(ai)]
+            if aid in seen:
+                continue
+            rows.append((aid, float(s)))
+        content_scores = pd.Series(dict(rows), name="content_score", dtype="float32")
+
+        candidates = pd.concat([cf_scores, content_scores], axis=1)
+        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
+            reliable = set(
+                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
+            )
+            candidates = candidates[candidates.index.isin(reliable)]
+        if len(candidates) == 0:
+            return []
+
+        def minmax(s):
+            s = s.astype("float32")
+            lo, hi = s.min(skipna=True), s.max(skipna=True)
+            if pd.isna(lo) or hi == lo:
+                return s.fillna(0.0) * 0.0
+            return ((s - lo) / (hi - lo)).fillna(0.0)
+
+        candidates["cf_n"] = minmax(candidates["cf_score"])
+        candidates["content_n"] = minmax(candidates["content_score"])
+        candidates["final_score"] = (
+            cfg.alpha * candidates["cf_n"] + (1 - cfg.alpha) * candidates["content_n"]
+        )
+        return candidates["final_score"].sort_values(ascending=False).head(k).index.tolist()
 
     @staticmethod
-    def _ndcg_at_k(rec_ids: list[int], relevant_set: set[int], k: int) -> float:
-        dcg = sum(1.0 / np.log2(i + 2) for i, mal in enumerate(rec_ids[:k]) if mal in relevant_set)
-        ideal_k = min(len(relevant_set), k)
-        idcg = sum(1.0 / np.log2(i + 2) for i in range(ideal_k))
-        return float(dcg / idcg) if idcg > 0 else 0.0
+    def _metrics(recs: list[int], relevant: set, k: int) -> dict:
+        top = recs[:k]
+        hits = [1 if aid in relevant else 0 for aid in top]
+        precision = sum(hits) / k if k > 0 else 0.0
+        recall = sum(hits) / len(relevant) if relevant else 0.0
+        dcg = sum(h / np.log2(i + 2) for i, h in enumerate(hits))
+        idcg = sum(1 / np.log2(i + 2) for i in range(min(len(relevant), k)))
+        ndcg = dcg / idcg if idcg > 0 else 0.0
+        return {"precision@k": precision, "recall@k": recall, "ndcg@k": ndcg}
 
-    def evaluate_hybrid(self, ratings_df: pd.DataFrame) -> dict:
-        threshold = self.config.relevant_threshold
-        top_k = self.config.top_k
+    def _evaluate_user(self, user_id: int, rng: np.random.Generator) -> dict | None:
+        cfg = self.config
+        uar = self.user_anime_ratings_df
+        user_rats = uar[uar["user_id"] == user_id]
+        if len(user_rats) < cfg.min_user_ratings:
+            return None
 
-        relevant_df = ratings_df[ratings_df["rating"] >= threshold]
+        n_hold = max(1, int(round(len(user_rats) * cfg.holdout_ratio)))
+        hold_pos = rng.choice(len(user_rats), size=n_hold, replace=False)
+        mask = np.zeros(len(user_rats), dtype=bool)
+        mask[hold_pos] = True
+        holdout = user_rats.iloc[mask]
+        train = user_rats.iloc[~mask]
 
-        users_evaluated = 0
-        hit_users = 0
-        recall_sum = 0.0
-        precision_sum = 0.0
-        ndcg_sum = 0.0
+        relevant = set(holdout.loc[holdout["rating"] >= cfg.relevant_threshold, "anime_id"].tolist())
+        if not relevant:
+            return None
 
-        for user_id, group in relevant_df.groupby("user_id"):
-            uid = int(user_id)  # type: ignore[arg-type]
-            if uid not in self.user_id_to_uidx:
-                continue
-            relevant_set = {int(a) for a in group["anime_id"].tolist()}
-            try:
-                recs = self.hybrid.recommend(uid, top_k=top_k)
-            except Exception:
-                continue
-            rec_ids = [int(m) for m in recs["mal_id"].tolist()]
-            n_hits = len(set(rec_ids) & relevant_set)
+        user_vec = self._build_user_vec(train)
+        if user_vec is None or not np.isfinite(user_vec).all() or np.linalg.norm(user_vec) == 0:
+            return None
 
-            users_evaluated += 1
-            hit_users += 1 if n_hits > 0 else 0
-            recall_sum += n_hits / len(relevant_set)
-            precision_sum += n_hits / top_k
-            ndcg_sum += self._ndcg_at_k(rec_ids, relevant_set, top_k)
-
-        if users_evaluated == 0:
-            return {"users_evaluated": 0}
+        seen = set(train["anime_id"].tolist())
+        cf_recs = self._cf_top_k(user_id, user_vec, seen, cfg.top_k)
+        hybrid_recs = self._hybrid_top_k(user_id, user_vec, seen, cfg.top_k)
 
         return {
-            "users_evaluated": users_evaluated,
-            "k": top_k,
-            "relevant_threshold": threshold,
-            "hit_rate@k": hit_users / users_evaluated,
-            "recall@k": recall_sum / users_evaluated,
-            "precision@k": precision_sum / users_evaluated,
-            "ndcg@k": ndcg_sum / users_evaluated,
+            "user_id": int(user_id),
+            "n_relevant": len(relevant),
+            "cf": self._metrics(cf_recs, relevant, cfg.top_k),
+            "hybrid": self._metrics(hybrid_recs, relevant, cfg.top_k),
         }
 
-    def evaluate_content(self) -> dict:
-        k = self.config.content_neighbors_k
-        sample_size = min(self.config.content_sample_size, self.content_index.ntotal)
-        rng = np.random.default_rng(self.config.random_state)
-        sample_aidx = rng.choice(self.content_index.ntotal, size=sample_size, replace=False)
-
-        jaccards: list[float] = []
-        evaluated = 0
-
-        for aidx in sample_aidx:
-            query_mal = self.aidx_to_mal_id.get(int(aidx))
-            if query_mal is None or query_mal not in self.genre_lookup:
-                continue
-            query_genres = self.genre_lookup[query_mal]
-            if not query_genres:
-                continue
-
-            vec = self.content_index.reconstruct(int(aidx)).reshape(1, -1)
-            _, indices = self.content_index.search(vec, k + 1)
-            neighbor_aidxs = [i for i in indices[0] if i != aidx][:k]
-
-            per_query_jaccards = []
-            for nidx in neighbor_aidxs:
-                nmal = self.aidx_to_mal_id.get(int(nidx))
-                if nmal is None or nmal not in self.genre_lookup:
-                    continue
-                ngenres = self.genre_lookup[nmal]
-                union = query_genres | ngenres
-                if not union:
-                    continue
-                per_query_jaccards.append(len(query_genres & ngenres) / len(union))
-
-            if per_query_jaccards:
-                jaccards.append(float(np.mean(per_query_jaccards)))
-                evaluated += 1
-
+    def _aggregate(self, per_user: list[dict], key: str) -> dict:
+        if not per_user:
+            return {"users_evaluated": 0, "precision@k": 0.0, "recall@k": 0.0, "ndcg@k": 0.0}
+        df = pd.DataFrame([r[key] for r in per_user])
         return {
-            "queries_evaluated": evaluated,
-            "k": k,
-            "mean_genre_jaccard@k": float(np.mean(jaccards)) if jaccards else 0.0,
-            "median_genre_jaccard@k": float(np.median(jaccards)) if jaccards else 0.0,
+            "users_evaluated": len(per_user),
+            "precision@k": float(df["precision@k"].mean()),
+            "recall@k": float(df["recall@k"].mean()),
+            "ndcg@k": float(df["ndcg@k"].mean()),
         }
 
-    def _user_based_recommend(self, user_id: int) -> list[int]:
-        threshold = self.config.relevant_threshold / 10.0
-        k_users = self.config.similar_users_k
-        top_k = self.config.top_k
+    def run(self) -> EvaluationArtifact:
+        cfg = self.config
+        rng = np.random.default_rng(cfg.random_state)
 
-        uidx = self.user_id_to_uidx[user_id]
-        query_vec = self.user_index.reconstruct(uidx).reshape(1, -1)
-        sims, peers = self.user_index.search(query_vec, k_users + 1)
-        mask = peers[0] != uidx
-        peer_idx = peers[0][mask][:k_users]
-        peer_sim = sims[0][mask][:k_users].astype("float32")
+        uar = self.user_anime_ratings_df
+        counts = uar.groupby("user_id").size()
+        eligible = counts[counts >= cfg.min_user_ratings].index.to_numpy()
+        if len(eligible) == 0:
+            raise ValueError("no users meet min_user_ratings threshold")
 
-        peer_rows = self.ratings_csr[peer_idx]
-        high_mask = peer_rows >= threshold
-        peer_rows_high = peer_rows.multiply(high_mask)
+        n_sample = min(cfg.n_users_sample, len(eligible))
+        sampled = rng.choice(eligible, size=n_sample, replace=False)
 
-        scores = np.asarray(peer_sim @ peer_rows_high).ravel()
+        per_user: list[dict] = []
+        for i, uid in enumerate(sampled, 1):
+            result = self._evaluate_user(int(uid), rng)
+            if result is not None:
+                per_user.append(result)
+            if i % 50 == 0:
+                print(f"  evaluated {i}/{n_sample} (kept {len(per_user)})")
 
-        seen = self.ratings_csr.getrow(uidx).indices
-        scores[seen] = -np.inf
-
-        if scores.max() == -np.inf:
-            return []
-        top = np.argpartition(-scores, top_k)[:top_k]
-        top = top[np.argsort(-scores[top])]
-        return [self.aidx_to_mal_id[int(i)] for i in top]
-
-    def evaluate_user_based(self, ratings_df: pd.DataFrame) -> dict:
-        threshold = self.config.relevant_threshold
-        top_k = self.config.top_k
-
-        relevant_df = ratings_df[ratings_df["rating"] >= threshold]
-
-        users_evaluated = 0
-        hit_users = 0
-        recall_sum = 0.0
-        precision_sum = 0.0
-        ndcg_sum = 0.0
-
-        for user_id, group in relevant_df.groupby("user_id"):
-            uid = int(user_id)  # type: ignore[arg-type]
-            if uid not in self.user_id_to_uidx:
-                continue
-            relevant_set = {int(a) for a in group["anime_id"].tolist()}
-            rec_ids = self._user_based_recommend(uid)
-            if not rec_ids:
-                continue
-            n_hits = len(set(rec_ids) & relevant_set)
-
-            users_evaluated += 1
-            hit_users += 1 if n_hits > 0 else 0
-            recall_sum += n_hits / len(relevant_set)
-            precision_sum += n_hits / top_k
-            ndcg_sum += self._ndcg_at_k(rec_ids, relevant_set, top_k)
-
-        if users_evaluated == 0:
-            return {"users_evaluated": 0}
-
-        return {
-            "users_evaluated": users_evaluated,
-            "k": top_k,
-            "relevant_threshold": threshold,
-            "hit_rate@k": hit_users / users_evaluated,
-            "recall@k": recall_sum / users_evaluated,
-            "precision@k": precision_sum / users_evaluated,
-            "ndcg@k": ndcg_sum / users_evaluated,
+        cf_metrics = self._aggregate(per_user, "cf")
+        hybrid_metrics = self._aggregate(per_user, "hybrid")
+        summary = {
+            "config": {
+                "top_k": cfg.top_k,
+                "holdout_ratio": cfg.holdout_ratio,
+                "relevant_threshold": cfg.relevant_threshold,
+                "n_users_sample": cfg.n_users_sample,
+                "min_user_ratings": cfg.min_user_ratings,
+                "random_state": cfg.random_state,
+            },
+            "cf": cf_metrics,
+            "hybrid": hybrid_metrics,
         }
 
-    def run(self, split_name: str, ratings_df: pd.DataFrame) -> EvaluationArtifact:
-        out_dir = os.path.join(self.config.evaluation_dir, split_name)
-        os.makedirs(out_dir, exist_ok=True)
-
-        hybrid_metrics = self.evaluate_hybrid(ratings_df)
-        content_metrics = self.evaluate_content()
-        user_metrics = self.evaluate_user_based(ratings_df)
-
+        out_dir = cfg.evaluation_dir
+        cf_path = os.path.join(out_dir, EVAL_CF_METRICS_FILE)
         hybrid_path = os.path.join(out_dir, EVAL_HYBRID_METRICS_FILE)
-        content_path = os.path.join(out_dir, EVAL_CONTENT_METRICS_FILE)
-        user_path = os.path.join(out_dir, EVAL_USER_METRICS_FILE)
         summary_path = os.path.join(out_dir, EVAL_SUMMARY_FILE)
 
+        with open(cf_path, "w", encoding="utf-8") as f:
+            json.dump(cf_metrics, f, indent=2)
         with open(hybrid_path, "w", encoding="utf-8") as f:
             json.dump(hybrid_metrics, f, indent=2)
-        with open(content_path, "w", encoding="utf-8") as f:
-            json.dump(content_metrics, f, indent=2)
-        with open(user_path, "w", encoding="utf-8") as f:
-            json.dump(user_metrics, f, indent=2)
-
-        summary = {
-            "split": split_name,
-            "hybrid": hybrid_metrics,
-            "content_based": content_metrics,
-            "user_based": user_metrics,
-        }
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
+        print(f"\nCF      : {cf_metrics}")
+        print(f"Hybrid  : {hybrid_metrics}")
+
         return EvaluationArtifact(
-            split_dir=out_dir,
+            evaluation_dir=out_dir,
+            cf_metrics_path=cf_path,
             hybrid_metrics_path=hybrid_path,
-            content_metrics_path=content_path,
-            user_metrics_path=user_path,
             summary_path=summary_path,
         )

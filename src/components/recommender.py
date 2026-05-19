@@ -86,6 +86,22 @@ class ContentBasedRecommender:
         self.fit(anime_df)
         return self.save()
 
+    def load(self, anime_df: pd.DataFrame) -> "ContentBasedRecommender":
+        out_dir = self.config.content_based_dir
+        self.anime_df = anime_df.reset_index(drop=True).copy()
+
+        with open(os.path.join(out_dir, TFIDF_VECTORIZER_FILE), "rb") as f:
+            self.vectorizer = pickle.load(f)
+        soup = self._build_soup(self.anime_df)
+        self.tfidf_matrix = self.vectorizer.transform(soup)
+        self.vectors = normalize(self.tfidf_matrix, norm="l2", axis=1).astype(np.float32).toarray()
+
+        self.index = faiss.read_index(os.path.join(out_dir, CONTENT_INDEX_FILE))
+        with open(os.path.join(out_dir, ANIME_ID_TO_IDX_FILE), "r", encoding="utf-8") as f:
+            self.anime_id_to_idx = {int(k): int(v) for k, v in json.load(f).items()}
+        self.idx_to_anime_id = {v: k for k, v in self.anime_id_to_idx.items()}
+        return self
+
     def recommend(self, anime_id: int, k: int = 10) -> pd.DataFrame:
         idx = self.anime_id_to_idx.get(int(anime_id))
         if idx is None:
@@ -99,7 +115,7 @@ class ContentBasedRecommender:
             rows.append({"anime_id": self.idx_to_anime_id[int(nbr)], "similarity": float(score)})
             if len(rows) == k:
                 break
-        return pd.DataFrame(rows).merge(self.anime_df[["anime_id", "title", "genres", "era"]] on="anime_id", how="left")
+        return pd.DataFrame(rows).merge(self.anime_df[["anime_id", "title", "genres", "era"]], on="anime_id", how="left")
 
 
 class UserBasedRecommender:
@@ -185,6 +201,23 @@ class UserBasedRecommender:
     def run(self, ratings_df: pd.DataFrame, users_df: pd.DataFrame, content: ContentBasedRecommender) -> UserBasedRecommenderArtifact:
         self.fit(ratings_df, users_df, content)
         return self.save()
+
+    def load(self) -> "UserBasedRecommender":
+        """Load index + user_id_to_idx from disk. user_vectors_sparse is NOT restored
+        (would require retraining); methods that need it (similar_users) won't work
+        after load — use index.reconstruct() instead."""
+        out_dir = self.config.user_based_dir
+        self.index = faiss.read_index(os.path.join(out_dir, USER_INDEX_FILE))
+        with open(os.path.join(out_dir, USER_ID_TO_IDX_FILE), "r", encoding="utf-8") as f:
+            self.user_id_to_idx = {int(k): int(v) for k, v in json.load(f).items()}
+
+        # Last vector in the index is the avg vector for cold users.
+        self.avg_idx = self.index.ntotal - 1
+        # idx_to_user_id excludes cold users (which all share avg_idx).
+        self.idx_to_user_id = {
+            i: uid for uid, i in self.user_id_to_idx.items() if i != self.avg_idx
+        }
+        return self
 
     def similar_users(self, user_id: int, k: int = 10) -> pd.DataFrame:
         u_idx = self.user_id_to_idx.get(int(user_id))

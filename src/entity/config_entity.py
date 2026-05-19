@@ -82,8 +82,8 @@ class HybridRecommenderConfig:
 class EvaluationConfig:
     evaluation_dir: str = os.path.join(training_pipeline_config.artifact_dir, EVALUATION_DIR_NAME)
     top_k: int = _ev["top_k"]
-    similar_users_k: int = _ev["similar_users_k"]
+    holdout_ratio: float = _ev["holdout_ratio"]
     relevant_threshold: float = _ev["relevant_threshold"]
-    content_neighbors_k: int = _ev["content_neighbors_k"]
-    content_sample_size: int = _ev["content_sample_size"]
+    n_users_sample: int = _ev["n_users_sample"]
+    min_user_ratings: int = _ev["min_user_ratings"]
     random_state: int = _ev["random_state"]

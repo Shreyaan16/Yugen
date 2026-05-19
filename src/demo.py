@@ -5,6 +5,7 @@ import pandas as pd
 
 from src.components.data_ingestion import DataIngestion
 from src.components.data_preprocessing import DataPreprocessing
+from src.components.evaluation import Evaluation
 from src.components.loading import Loading
 from src.components.recommender import (
 	CFRecommender,
@@ -24,6 +25,7 @@ from src.entity.config_entity import (
 	ContentBasedRecommenderConfig,
 	DataIngestionConfig,
 	DataPreprocessingConfig,
+	EvaluationConfig,
 	HybridRecommenderConfig,
 	LoadingConfig,
 	UserBasedRecommenderConfig,
@@ -63,16 +65,14 @@ def _load_preprocessed(preproc_dir: str, raw_dir: str):
 	return anime_df, users_df, user_anime_ratings_df, ratings_df
 
 
-def run_recommenders(preproc_dir: str, raw_dir: str):
+def _train_all(preproc_dir: str, raw_dir: str):
 	anime_df, users_df, user_anime_ratings_df, ratings_df = _load_preprocessed(preproc_dir, raw_dir)
 
 	content = ContentBasedRecommender(ContentBasedRecommenderConfig())
-	content_artifact = content.run(anime_df)
-	print(f"Content-based saved to {content_artifact.content_based_dir}")
+	content.run(anime_df)
 
 	user_based = UserBasedRecommender(UserBasedRecommenderConfig())
-	user_artifact = user_based.run(user_anime_ratings_df, users_df, content)
-	print(f"User-based saved to {user_artifact.user_based_dir}")
+	user_based.run(user_anime_ratings_df, users_df, content)
 
 	cf = CFRecommender(CFRecommenderConfig())
 	cf.fit(user_based, anime_df, user_anime_ratings_df, ratings_df)
@@ -81,6 +81,12 @@ def run_recommenders(preproc_dir: str, raw_dir: str):
 	hybrid = HybridRecommender(HybridRecommenderConfig())
 	hybrid.fit(content, user_based, anime_df, user_anime_ratings_df, ratings_df)
 	hybrid.save()
+
+	return content, user_based, cf, hybrid, anime_df, users_df, user_anime_ratings_df, ratings_df
+
+
+def run_recommenders(preproc_dir: str, raw_dir: str):
+	content, user_based, cf, hybrid, anime_df, _, _, _ = _train_all(preproc_dir, raw_dir)
 
 	sample_anime_id = int(anime_df["anime_id"].iloc[0])
 	print(f"\nContent recs for anime {sample_anime_id}:")
@@ -97,6 +103,21 @@ def run_recommenders(preproc_dir: str, raw_dir: str):
 	print(hybrid.recommend(sample_uid))
 
 
+def run_evaluation(preproc_dir: str, raw_dir: str) -> str:
+	anime_df, _, uar, ratings_df = _load_preprocessed(preproc_dir, raw_dir)
+
+	content = ContentBasedRecommender(ContentBasedRecommenderConfig()).load(anime_df)
+	user_based = UserBasedRecommender(UserBasedRecommenderConfig()).load()
+	cf = CFRecommender(CFRecommenderConfig()).fit(user_based, anime_df, uar, ratings_df)
+	hybrid = HybridRecommender(HybridRecommenderConfig()).fit(content, user_based, anime_df, uar, ratings_df)
+
+	evaluator = Evaluation(EvaluationConfig())
+	evaluator.fit(content, user_based, cf, hybrid, anime_df, uar, ratings_df)
+	artifact = evaluator.run()
+	print(f"\nEvaluation metrics saved to {artifact.evaluation_dir}")
+	return artifact.evaluation_dir
+
+
 if __name__ == "__main__":
 	# uploaded_tables = run_loading()
 	# print(f"Uploaded {len(uploaded_tables)} tables to {CONTAINER_NAME}")
@@ -106,4 +127,5 @@ if __name__ == "__main__":
 	# print(f"Data preprocessed to {data_preprocessing_dir}")
 
 	preproc_cfg = DataPreprocessingConfig()
-	run_recommenders(preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir)
+	# run_recommenders(preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir)
+	run_evaluation(preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir)

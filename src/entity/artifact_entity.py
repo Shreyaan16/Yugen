@@ -44,7 +44,6 @@ class HybridRecommenderArtifact:
 @dataclass
 class EvaluationArtifact:
     evaluation_dir: str
+    cf_metrics_path: str
     hybrid_metrics_path: str
-    content_metrics_path: str
-    user_metrics_path: str
     summary_path: str
