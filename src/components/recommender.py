@@ -7,20 +7,9 @@ import faiss
 from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
-
 from src.constants import (CONTENT_INDEX_FILE, ANIME_ID_TO_IDX_FILE, TFIDF_VECTORIZER_FILE, USER_INDEX_FILE, USER_ID_TO_IDX_FILE)
-from src.entity.config_entity import (
-    ContentBasedRecommenderConfig,
-    UserBasedRecommenderConfig,
-    CFRecommenderConfig,
-    HybridRecommenderConfig,
-)
-from src.entity.artifact_entity import (
-    ContentBasedRecommenderArtifact,
-    UserBasedRecommenderArtifact,
-    CFRecommenderArtifact,
-    HybridRecommenderArtifact,
-)
+from src.entity.config_entity import (ContentBasedRecommenderConfig, UserBasedRecommenderConfig, CFRecommenderConfig, HybridRecommenderConfig)
+from src.entity.artifact_entity import (ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact,  CFRecommenderArtifact, HybridRecommenderArtifact)
 
 
 def _join_list(x):
@@ -58,12 +47,7 @@ class ContentBasedRecommender:
         df = anime_df.reset_index(drop=True).copy()
         soup = self._build_soup(df)
 
-        vectorizer = TfidfVectorizer(
-            stop_words="english",
-            max_features=self.config.max_features,
-            ngram_range=self.config.ngram_range,
-            min_df=self.config.min_df,
-        )
+        vectorizer = TfidfVectorizer(stop_words="english", max_features=self.config.max_features, ngram_range=self.config.ngram_range, min_df=self.config.min_df)
         tfidf_matrix = vectorizer.fit_transform(soup)
         vectors = normalize(tfidf_matrix, norm="l2", axis=1).astype(np.float32).toarray()
 
@@ -115,11 +99,7 @@ class ContentBasedRecommender:
             rows.append({"anime_id": self.idx_to_anime_id[int(nbr)], "similarity": float(score)})
             if len(rows) == k:
                 break
-        return pd.DataFrame(rows).merge(
-            self.anime_df[["anime_id", "title", "genres", "era"]],
-            on="anime_id",
-            how="left",
-        )
+        return pd.DataFrame(rows).merge(self.anime_df[["anime_id", "title", "genres", "era"]] on="anime_id", how="left")
 
 
 class UserBasedRecommender:
@@ -133,12 +113,7 @@ class UserBasedRecommender:
         self.user_vectors_sparse = None
         self.avg_idx: int | None = None
 
-    def fit(
-        self,
-        ratings_df: pd.DataFrame,
-        users_df: pd.DataFrame,
-        content: ContentBasedRecommender,
-    ) -> "UserBasedRecommender":
+    def fit(self, ratings_df: pd.DataFrame, users_df: pd.DataFrame, content: ContentBasedRecommender) -> "UserBasedRecommender":
         anime_idx_map = content.anime_id_to_idx
         tfidf_matrix = content.tfidf_matrix
 
@@ -205,18 +180,9 @@ class UserBasedRecommender:
         with open(user_id_to_idx_path, "w", encoding="utf-8") as f:
             json.dump(self.user_id_to_idx, f)
 
-        return UserBasedRecommenderArtifact(
-            user_based_dir=out_dir,
-            index_path=index_path,
-            user_id_to_idx_path=user_id_to_idx_path,
-        )
+        return UserBasedRecommenderArtifact(user_based_dir=out_dir, index_path=index_path, user_id_to_idx_path=user_id_to_idx_path)
 
-    def run(
-        self,
-        ratings_df: pd.DataFrame,
-        users_df: pd.DataFrame,
-        content: ContentBasedRecommender,
-    ) -> UserBasedRecommenderArtifact:
+    def run(self, ratings_df: pd.DataFrame, users_df: pd.DataFrame, content: ContentBasedRecommender) -> UserBasedRecommenderArtifact:
         self.fit(ratings_df, users_df, content)
         return self.save()
 
@@ -243,8 +209,6 @@ class UserBasedRecommender:
 
 
 class CFRecommender:
-    """User-based collaborative filtering: user -> top anime via neighbors' ratings."""
-
     def __init__(self, config: CFRecommenderConfig | None = None):
         self.config = config or CFRecommenderConfig()
         os.makedirs(self.config.cf_dir, exist_ok=True)
@@ -254,13 +218,7 @@ class CFRecommender:
         self.user_anime_ratings_df: pd.DataFrame | None = None
         self.ratings_df: pd.DataFrame | None = None
 
-    def fit(
-        self,
-        user_based: UserBasedRecommender,
-        anime_df: pd.DataFrame,
-        user_anime_ratings_df: pd.DataFrame,
-        ratings_df: pd.DataFrame,
-    ) -> "CFRecommender":
+    def fit(self, user_based: UserBasedRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame, ratings_df: pd.DataFrame,) -> "CFRecommender":
         self.user_based = user_based
         self.anime_df = anime_df
         self.user_anime_ratings_df = user_anime_ratings_df
@@ -270,13 +228,7 @@ class CFRecommender:
     def save(self) -> CFRecommenderArtifact:
         return CFRecommenderArtifact(cf_dir=self.config.cf_dir)
 
-    def run(
-        self,
-        user_based: UserBasedRecommender,
-        anime_df: pd.DataFrame,
-        user_anime_ratings_df: pd.DataFrame,
-        ratings_df: pd.DataFrame,
-    ) -> CFRecommenderArtifact:
+    def run(self, user_based: UserBasedRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame, ratings_df: pd.DataFrame) -> CFRecommenderArtifact:
         self.fit(user_based, anime_df, user_anime_ratings_df, ratings_df)
         return self.save()
 
@@ -313,11 +265,7 @@ class CFRecommender:
         nbr["sim"] = nbr["user_id"].map(sim_map)
         nbr["w_rating"] = nbr["rating"] * nbr["sim"]
 
-        agg = nbr.groupby("anime_id").agg(
-            num_neighbors=("user_id", "size"),
-            weighted_sum=("w_rating", "sum"),
-            sim_sum=("sim", "sum"),
-        )
+        agg = nbr.groupby("anime_id").agg(num_neighbors=("user_id", "size"), weighted_sum=("w_rating", "sum"), sim_sum=("sim", "sum"))
         agg = agg[agg["num_neighbors"] >= cfg.min_support]
         agg["score"] = agg["weighted_sum"] / agg["sim_sum"]
 
@@ -341,8 +289,6 @@ class CFRecommender:
 
 
 class HybridRecommender:
-    """Blend CF score (neighbor-weighted ratings) with content similarity score."""
-
     def __init__(self, config: HybridRecommenderConfig | None = None):
         self.config = config or HybridRecommenderConfig()
         os.makedirs(self.config.hybrid_dir, exist_ok=True)
@@ -353,14 +299,8 @@ class HybridRecommender:
         self.user_anime_ratings_df: pd.DataFrame | None = None
         self.ratings_df: pd.DataFrame | None = None
 
-    def fit(
-        self,
-        content: ContentBasedRecommender,
-        user_based: UserBasedRecommender,
-        anime_df: pd.DataFrame,
-        user_anime_ratings_df: pd.DataFrame,
-        ratings_df: pd.DataFrame,
-    ) -> "HybridRecommender":
+    def fit(self, content: ContentBasedRecommender, user_based: UserBasedRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame, 
+            ratings_df: pd.DataFrame) -> "HybridRecommender":
         self.content = content
         self.user_based = user_based
         self.anime_df = anime_df
@@ -371,14 +311,8 @@ class HybridRecommender:
     def save(self) -> HybridRecommenderArtifact:
         return HybridRecommenderArtifact(hybrid_dir=self.config.hybrid_dir)
 
-    def run(
-        self,
-        content: ContentBasedRecommender,
-        user_based: UserBasedRecommender,
-        anime_df: pd.DataFrame,
-        user_anime_ratings_df: pd.DataFrame,
-        ratings_df: pd.DataFrame,
-    ) -> HybridRecommenderArtifact:
+    def run(self, content: ContentBasedRecommender, user_based: UserBasedRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame,
+        ratings_df: pd.DataFrame,) -> HybridRecommenderArtifact:
         self.fit(content, user_based, anime_df, user_anime_ratings_df, ratings_df)
         return self.save()
 
