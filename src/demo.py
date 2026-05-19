@@ -1,35 +1,13 @@
 from __future__ import annotations
-
 import os
 import pandas as pd
-
 from src.components.data_ingestion import DataIngestion
 from src.components.data_preprocessing import DataPreprocessing
 from src.components.evaluation import Evaluation
 from src.components.loading import Loading
-from src.components.recommender import (
-	CFRecommender,
-	ContentBasedRecommender,
-	HybridRecommender,
-	UserBasedRecommender,
-)
-from src.constants import (
-	ANIME_FILE_NAME,
-	CONTAINER_NAME,
-	RATINGS_FILE_NAME,
-	USERS_FILE_NAME,
-	USER_ANIME_RATINGS_FILE_NAME,
-)
-from src.entity.config_entity import (
-	CFRecommenderConfig,
-	ContentBasedRecommenderConfig,
-	DataIngestionConfig,
-	DataPreprocessingConfig,
-	EvaluationConfig,
-	HybridRecommenderConfig,
-	LoadingConfig,
-	UserBasedRecommenderConfig,
-)
+from src.components.recommender import *
+from src.constants import *
+from src.entity.config_entity import *
 
 
 def run_loading(schema: str = "public") -> list[str]:
@@ -56,9 +34,7 @@ def run_data_preprocessing() -> str:
 def _load_preprocessed(preproc_dir: str, raw_dir: str):
 	anime_df = pd.read_csv(os.path.join(preproc_dir, ANIME_FILE_NAME))
 	for col in ["genres", "producers", "studios"]:
-		anime_df[col] = anime_df[col].apply(
-			lambda s: eval(s) if isinstance(s, str) and s.startswith("[") else []
-		)
+		anime_df[col] = anime_df[col].apply(lambda s: eval(s) if isinstance(s, str) and s.startswith("[") else [])
 	users_df = pd.read_csv(os.path.join(preproc_dir, USERS_FILE_NAME))
 	user_anime_ratings_df = pd.read_csv(os.path.join(preproc_dir, USER_ANIME_RATINGS_FILE_NAME))
 	ratings_df = pd.read_csv(os.path.join(raw_dir, RATINGS_FILE_NAME))
@@ -119,13 +95,13 @@ def run_evaluation(preproc_dir: str, raw_dir: str) -> str:
 
 
 if __name__ == "__main__":
-	# uploaded_tables = run_loading()
-	# print(f"Uploaded {len(uploaded_tables)} tables to {CONTAINER_NAME}")
-	# data_ingestion_dir = run_data_ingestion()
-	# print(f"Data ingested to {data_ingestion_dir}")
-	# data_preprocessing_dir = run_data_preprocessing()
-	# print(f"Data preprocessed to {data_preprocessing_dir}")
+	uploaded_tables = run_loading()
+	print(f"Uploaded {len(uploaded_tables)} tables to {CONTAINER_NAME}")
+	data_ingestion_dir = run_data_ingestion()
+	print(f"Data ingested to {data_ingestion_dir}")
+	data_preprocessing_dir = run_data_preprocessing()
+	print(f"Data preprocessed to {data_preprocessing_dir}")
 
 	preproc_cfg = DataPreprocessingConfig()
-	# run_recommenders(preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir)
+	run_recommenders(preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir)
 	run_evaluation(preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir)

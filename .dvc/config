@@ -1,4 +1,0 @@
-[core]
-    remote = azure_remote
-['remote "azure_remote"']
-    url = azure://yugen-dvc/
