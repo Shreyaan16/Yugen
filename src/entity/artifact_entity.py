@@ -13,10 +13,7 @@ class LoadingArtifact:
 class DataPreprocessingArtifact:
     data_preprocessing_dir: str
     raw_data_dir: str
-    train_data_dir: str
-    test_data_dir: str
-    val_data_dir: str
-
+    
 @dataclass
 class ContentBasedRecommenderArtifact:
     content_based_dir: str

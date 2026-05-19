@@ -4,7 +4,6 @@ from src.constants import *
 from src.utils import read_yaml
 
 _params = read_yaml(PARAMS_PATH)
-_pp = _params["data_preprocessing"]
 _cb = _params["content_based"]
 _ub = _params["user_based"]
 _hy = _params["hybrid"]
@@ -39,15 +38,8 @@ class LoadingConfig:
 class DataPreprocessingConfig:
     data_preprocessing_dir: str = _data_preprocessing_dir
     raw_data_dir: str = os.path.join(training_pipeline_config.artifact_dir, RAW_DATA_DIR_NAME)
-    train_data_dir: str = os.path.join(_data_preprocessing_dir, TRAIN_DATA_DIR_NAME)
-    test_data_dir: str = os.path.join(_data_preprocessing_dir, TEST_DATA_DIR_NAME)
-    val_data_dir: str = os.path.join(_data_preprocessing_dir, VAL_DATA_DIR_NAME)
-    train_ratio: float = _pp["train_ratio"]
-    val_ratio: float = _pp["val_ratio"]
-    test_ratio: float = _pp["test_ratio"]
-    random_state: int = _pp["random_state"]
 
-
+    
 @dataclass
 class ContentBasedRecommenderConfig:
     content_based_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, CONTENT_BASED_DIR_NAME)

@@ -26,9 +26,6 @@ DATABASE_URL: str = os.environ["DATABASE_URL"]
 DATA_INGESTION_DIR_NAME: str = "data_ingestion"
 RAW_DATA_DIR_NAME: str = "data_ingestion"
 DATA_PREPROCESSING_DIR_NAME: str = "data_preprocessing"
-TRAIN_DATA_DIR_NAME: str = "train_data"
-TEST_DATA_DIR_NAME: str = "test_data"
-VAL_DATA_DIR_NAME: str = "val_data"
 
 RECOMMENDER_DIR_NAME: str = "recommender"
 CONTENT_BASED_DIR_NAME: str = "content_based"
