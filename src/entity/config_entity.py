@@ -1,11 +1,12 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from src.constants import *
 from src.utils import read_yaml
 
 _params = read_yaml(PARAMS_PATH)
 _cb = _params["content_based"]
 _ub = _params["user_based"]
+_cf = _params["cf"]
 _hy = _params["hybrid"]
 _ev = _params["evaluation"]
 
@@ -19,6 +20,7 @@ class TrainingPipelineConfig:
 training_pipeline_config: TrainingPipelineConfig = TrainingPipelineConfig()
 
 _data_preprocessing_dir = os.path.join(training_pipeline_config.artifact_dir, DATA_PREPROCESSING_DIR_NAME)
+_recommender_dir = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME)
 
 
 @dataclass
@@ -39,29 +41,41 @@ class DataPreprocessingConfig:
     data_preprocessing_dir: str = _data_preprocessing_dir
     raw_data_dir: str = os.path.join(training_pipeline_config.artifact_dir, RAW_DATA_DIR_NAME)
 
-    
+
 @dataclass
 class ContentBasedRecommenderConfig:
-    content_based_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, CONTENT_BASED_DIR_NAME)
+    content_based_dir: str = os.path.join(_recommender_dir, CONTENT_BASED_DIR_NAME)
     max_features: int = _cb["max_features"]
-    n_components: int = _cb["n_components"]
-    hnsw_m: int = _cb["hnsw_m"]
-    ef_construction: int = _cb["ef_construction"]
+    ngram_range: tuple = field(default_factory=lambda: tuple(_cb["ngram_range"]))
+    min_df: int = _cb["min_df"]
     random_state: int = _cb["random_state"]
 
 
 @dataclass
 class UserBasedRecommenderConfig:
-    user_based_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, USER_BASED_DIR_NAME)
-    hnsw_m: int = _ub["hnsw_m"]
-    ef_construction: int = _ub["ef_construction"]
+    user_based_dir: str = os.path.join(_recommender_dir, USER_BASED_DIR_NAME)
+    min_ratings: int = _ub["min_ratings"]
+    chunk_size: int = _ub["chunk_size"]
+
+
+@dataclass
+class CFRecommenderConfig:
+    cf_dir: str = os.path.join(_recommender_dir, CF_DIR_NAME)
+    k_neighbors: int = _cf["k_neighbors"]
+    top_n: int = _cf["top_n"]
+    min_support: int = _cf["min_support"]
+    min_num_ratings: int = _cf["min_num_ratings"]
 
 
 @dataclass
 class HybridRecommenderConfig:
-    hybrid_dir: str = os.path.join(training_pipeline_config.artifact_dir, RECOMMENDER_DIR_NAME, HYBRID_DIR_NAME)
-    similar_users_k: int = _hy["similar_users_k"]
-    top_k: int = _hy["top_k"]
+    hybrid_dir: str = os.path.join(_recommender_dir, HYBRID_DIR_NAME)
+    k_neighbors: int = _hy["k_neighbors"]
+    top_n: int = _hy["top_n"]
+    alpha: float = _hy["alpha"]
+    min_support: int = _hy["min_support"]
+    min_num_ratings: int = _hy["min_num_ratings"]
+    content_pool: int = _hy["content_pool"]
 
 
 @dataclass

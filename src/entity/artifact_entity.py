@@ -9,33 +9,41 @@ class DataIngestionArtifact:
 class LoadingArtifact:
     uploaded_blobs: list[str]
 
+
 @dataclass
 class DataPreprocessingArtifact:
     data_preprocessing_dir: str
     raw_data_dir: str
-    
+
+
 @dataclass
 class ContentBasedRecommenderArtifact:
     content_based_dir: str
     index_path: str
-    mal_to_faiss_path: str
-    faiss_to_mal_path: str
+    anime_id_to_idx_path: str
+    tfidf_vectorizer_path: str
+
 
 @dataclass
 class UserBasedRecommenderArtifact:
     user_based_dir: str
     index_path: str
-    user_id_to_faiss_path: str
-    user_id_to_vector_path: str
+    user_id_to_idx_path: str
+
+
+@dataclass
+class CFRecommenderArtifact:
+    cf_dir: str
+
 
 @dataclass
 class HybridRecommenderArtifact:
     hybrid_dir: str
-    ratings_matrix_path: str
+
 
 @dataclass
 class EvaluationArtifact:
-    split_dir: str
+    evaluation_dir: str
     hybrid_metrics_path: str
     content_metrics_path: str
     user_metrics_path: str

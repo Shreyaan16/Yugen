@@ -1,403 +1,480 @@
 import json
 import os
+import pickle
 import numpy as np
 import pandas as pd
 import faiss
-from sklearn.decomposition import TruncatedSVD
+from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 
-from scipy.sparse import csr_matrix, save_npz, load_npz
-
-from src.constants import (
-    CONTENT_INDEX_FILE,
-    CONTENT_MAL_TO_FAISS_FILE,
-    CONTENT_FAISS_TO_MAL_FILE,
-    USER_INDEX_FILE,
-    USER_ID_TO_FAISS_FILE,
-    USER_ID_TO_VECTOR_FILE,
-    HYBRID_RATINGS_MATRIX_FILE,
-)
+from src.constants import (CONTENT_INDEX_FILE, ANIME_ID_TO_IDX_FILE, TFIDF_VECTORIZER_FILE, USER_INDEX_FILE, USER_ID_TO_IDX_FILE)
 from src.entity.config_entity import (
     ContentBasedRecommenderConfig,
     UserBasedRecommenderConfig,
+    CFRecommenderConfig,
     HybridRecommenderConfig,
 )
 from src.entity.artifact_entity import (
     ContentBasedRecommenderArtifact,
     UserBasedRecommenderArtifact,
+    CFRecommenderArtifact,
     HybridRecommenderArtifact,
 )
 
 
+def _join_list(x):
+    return " ".join(x) if isinstance(x, list) else ""
+
 class ContentBasedRecommender:
     def __init__(self, config: ContentBasedRecommenderConfig | None = None):
         self.config = config or ContentBasedRecommenderConfig()
-        self.max_features = self.config.max_features
-        self.n_components = self.config.n_components
-        self.hnsw_m = self.config.hnsw_m
-        self.ef_construction = self.config.ef_construction
-        self.random_state = self.config.random_state
+        os.makedirs(self.config.content_based_dir, exist_ok=True)
 
-        self.df: pd.DataFrame | None = None
-        self.embeddings: np.ndarray | None = None
+        self.anime_df: pd.DataFrame | None = None
+        self.vectorizer: TfidfVectorizer | None = None
+        self.tfidf_matrix = None
+        self.vectors: np.ndarray | None = None
         self.index: faiss.Index | None = None
-        self.mal_id_to_faiss_id: dict[int, int] = {}
-        self.faiss_id_to_mal_id: dict[int, int] = {}
-        self.title_to_idx: pd.Series | None = None
+        self.anime_id_to_idx: dict[int, int] = {}
+        self.idx_to_anime_id: dict[int, int] = {}
 
     @staticmethod
-    def _build_soup(row: pd.Series) -> str:
-        genres = str(row["Genres"]).replace(",", " ").replace("-", "")
-        producers = str(row["Producers"]).replace(",", " ")
-        studios = str(row["Studios"]).replace(",", " ")
-        source = str(row["Source"]).replace(" ", "_")
-        rating = str(row["Rating"]).replace(" ", "_").replace("-", "")
-        ep_bin = str(row["Ep_bin"])
-        dur_bin = str(row["Dur_bin"])
-        era = str(row["Era"])
-        synopsis = str(row["synopsis"])
-        title = str(row["Title"]).replace(" ", "_").replace("-", "")
-        return f"{genres} {genres} {studios} {producers} {source} {rating} {ep_bin} {dur_bin} {era} {synopsis} {title}"
+    def _build_soup(df: pd.DataFrame) -> pd.Series:
+        return (
+            df["title"].fillna("") + " "
+            + df["synopsis"].fillna("") + " "
+            + df["rating"].fillna("") + " "
+            + df["ep_bin"].fillna("") + " "
+            + df["dur_bin"].fillna("") + " "
+            + df["era"].fillna("") + " "
+            + df["source"].fillna("") + " "
+            + df["genres"].apply(_join_list) + " "
+            + df["producers"].apply(_join_list) + " "
+            + df["studios"].apply(_join_list)
+        ).str.lower()
 
-    def fit(self, df: pd.DataFrame) -> "ContentBasedRecommender":
-        df = df.reset_index(drop=True).copy()
-        df["soup"] = df.apply(self._build_soup, axis=1)
+    def fit(self, anime_df: pd.DataFrame) -> "ContentBasedRecommender":
+        df = anime_df.reset_index(drop=True).copy()
+        soup = self._build_soup(df)
 
-        tfidf = TfidfVectorizer(stop_words="english", max_features=self.max_features)
-        tfidf_matrix = tfidf.fit_transform(df["soup"])
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            max_features=self.config.max_features,
+            ngram_range=self.config.ngram_range,
+            min_df=self.config.min_df,
+        )
+        tfidf_matrix = vectorizer.fit_transform(soup)
+        vectors = normalize(tfidf_matrix, norm="l2", axis=1).astype(np.float32).toarray()
 
-        svd = TruncatedSVD(n_components=self.n_components, random_state=self.random_state)
-        embeddings = svd.fit_transform(tfidf_matrix).astype("float32")
-        embeddings = normalize(embeddings)
+        index = faiss.IndexFlatIP(vectors.shape[1])
+        index.add(vectors)
 
-        index = faiss.IndexHNSWFlat(embeddings.shape[1], self.hnsw_m, faiss.METRIC_INNER_PRODUCT)
-        index.hnsw.efConstruction = self.ef_construction
-        index.add(embeddings)
-
-        self.df = df
-        self.embeddings = embeddings
+        self.anime_df = df
+        self.vectorizer = vectorizer
+        self.tfidf_matrix = tfidf_matrix
+        self.vectors = vectors
         self.index = index
-        self.mal_id_to_faiss_id = {int(m): int(i) for i, m in enumerate(df["MAL_ID"]) if pd.notna(m)}
-        self.faiss_id_to_mal_id = {v: k for k, v in self.mal_id_to_faiss_id.items()}
-        self.title_to_idx = pd.Series(df.index, index=df["Title"].str.lower())
+        self.anime_id_to_idx = {int(a): int(i) for i, a in enumerate(df["anime_id"].tolist())}
+        self.idx_to_anime_id = {v: k for k, v in self.anime_id_to_idx.items()}
         return self
 
     def save(self) -> ContentBasedRecommenderArtifact:
-        assert self.index is not None, "Call fit() first"
         out_dir = self.config.content_based_dir
-        os.makedirs(out_dir, exist_ok=True)
-
         index_path = os.path.join(out_dir, CONTENT_INDEX_FILE)
-        mal_to_faiss_path = os.path.join(out_dir, CONTENT_MAL_TO_FAISS_FILE)
-        faiss_to_mal_path = os.path.join(out_dir, CONTENT_FAISS_TO_MAL_FILE)
+        anime_id_to_idx_path = os.path.join(out_dir, ANIME_ID_TO_IDX_FILE)
+        tfidf_path = os.path.join(out_dir, TFIDF_VECTORIZER_FILE)
 
         faiss.write_index(self.index, index_path)
-        with open(mal_to_faiss_path, "w", encoding="utf-8") as f:
-            json.dump(self.mal_id_to_faiss_id, f)
-        with open(faiss_to_mal_path, "w", encoding="utf-8") as f:
-            json.dump(self.faiss_id_to_mal_id, f)
+        with open(anime_id_to_idx_path, "w", encoding="utf-8") as f:
+            json.dump(self.anime_id_to_idx, f)
+        with open(tfidf_path, "wb") as f:
+            pickle.dump(self.vectorizer, f)
 
         return ContentBasedRecommenderArtifact(
             content_based_dir=out_dir,
             index_path=index_path,
-            mal_to_faiss_path=mal_to_faiss_path,
-            faiss_to_mal_path=faiss_to_mal_path,
+            anime_id_to_idx_path=anime_id_to_idx_path,
+            tfidf_vectorizer_path=tfidf_path,
         )
 
-    def load(self, df: pd.DataFrame) -> "ContentBasedRecommender":
-        out_dir = self.config.content_based_dir
-        self.df = df.reset_index(drop=True).copy()
-        self.index = faiss.read_index(os.path.join(out_dir, CONTENT_INDEX_FILE))
-        with open(os.path.join(out_dir, CONTENT_MAL_TO_FAISS_FILE), "r", encoding="utf-8") as f:
-            self.mal_id_to_faiss_id = {int(k): int(v) for k, v in json.load(f).items()}
-        self.faiss_id_to_mal_id = {v: k for k, v in self.mal_id_to_faiss_id.items()}
-        self.embeddings = np.vstack(
-            [self.index.reconstruct(i) for i in range(self.index.ntotal)]
-        ).astype("float32")
-        self.title_to_idx = pd.Series(self.df.index, index=self.df["Title"].str.lower())
-        return self
-
-    def run(self, df: pd.DataFrame) -> ContentBasedRecommenderArtifact:
-        self.fit(df)
+    def run(self, anime_df: pd.DataFrame) -> ContentBasedRecommenderArtifact:
+        self.fit(anime_df)
         return self.save()
 
-    def recommend(self, title: str, n: int = 10) -> pd.DataFrame | None:
-        assert self.index is not None and self.df is not None, "Call fit() or load() first"
-        key = title.lower()
-        if self.title_to_idx is None or key not in self.title_to_idx:
-            print(f"'{title}' not found.")
-            return None
-
-        idx = int(self.title_to_idx[key])
-        query_vec = self.embeddings[idx : idx + 1]
-        distances, indices = self.index.search(query_vec, n + 1)
-
-        top_indices = [i for i in indices[0] if i != idx][:n]
-        sim_scores = [d for i, d in zip(indices[0], distances[0]) if i != idx][:n]
-
-        results = self.df.iloc[top_indices][["Title", "Genres", "Studios", "Era", "Ep_bin"]].copy()
-        results["similarity"] = np.round(sim_scores, 3)
-        return results.reset_index(drop=True)
-
-    def recommend_by_mal_id(self, mal_id: int, n: int = 10) -> list[tuple[int, float]]:
-        """Return up to n (mal_id, similarity) pairs most similar to the given MAL_ID."""
-        assert self.index is not None, "Call fit() or load() first"
-        faiss_id = self.mal_id_to_faiss_id.get(int(mal_id))
-        if faiss_id is None:
-            return []
-
-        query_vec = self.embeddings[faiss_id : faiss_id + 1]
-        distances, indices = self.index.search(query_vec, n + 1)
-
-        out: list[tuple[int, float]] = []
-        for i, d in zip(indices[0], distances[0]):
-            if int(i) == faiss_id:
+    def recommend(self, anime_id: int, k: int = 10) -> pd.DataFrame:
+        idx = self.anime_id_to_idx.get(int(anime_id))
+        if idx is None:
+            raise ValueError(f"anime_id {anime_id} not found")
+        query = self.vectors[idx : idx + 1]
+        scores, neighbors = self.index.search(query, k + 1)
+        rows = []
+        for score, nbr in zip(scores[0], neighbors[0]):
+            if nbr == idx or nbr == -1:
                 continue
-            mid = self.faiss_id_to_mal_id.get(int(i))
-            if mid is None:
-                continue
-            out.append((int(mid), float(d)))
-            if len(out) >= n:
+            rows.append({"anime_id": self.idx_to_anime_id[int(nbr)], "similarity": float(score)})
+            if len(rows) == k:
                 break
-        return out
+        return pd.DataFrame(rows).merge(
+            self.anime_df[["anime_id", "title", "genres", "era"]],
+            on="anime_id",
+            how="left",
+        )
 
 
 class UserBasedRecommender:
     def __init__(self, config: UserBasedRecommenderConfig | None = None):
         self.config = config or UserBasedRecommenderConfig()
-        self.hnsw_m = self.config.hnsw_m
-        self.ef_construction = self.config.ef_construction
+        os.makedirs(self.config.user_based_dir, exist_ok=True)
 
-        self.user_ids: np.ndarray | None = None
-        self.user_matrix: np.ndarray | None = None
         self.index: faiss.Index | None = None
-        self.user_id_to_faiss_id: dict[int, int] = {}
+        self.user_id_to_idx: dict[int, int] = {}
+        self.idx_to_user_id: dict[int, int] = {}
+        self.user_vectors_sparse = None
+        self.avg_idx: int | None = None
 
     def fit(
         self,
         ratings_df: pd.DataFrame,
-        content_artifact: ContentBasedRecommenderArtifact,
+        users_df: pd.DataFrame,
+        content: ContentBasedRecommender,
     ) -> "UserBasedRecommender":
-        content_index = faiss.read_index(content_artifact.index_path)
-        with open(content_artifact.mal_to_faiss_path, "r", encoding="utf-8") as f:
-            mal_id_to_faiss_id = {int(k): int(v) for k, v in json.load(f).items()}
+        anime_idx_map = content.anime_id_to_idx
+        tfidf_matrix = content.tfidf_matrix
 
-        ratings = ratings_df.dropna(subset=["anime_id", "rating"]).copy()
-        ratings["anime_id"] = ratings["anime_id"].astype(int)
-        ratings = ratings[ratings["anime_id"].isin(mal_id_to_faiss_id)]
-        ratings = ratings[ratings["rating"] > 0]
+        ratings = ratings_df[ratings_df["anime_id"].isin(anime_idx_map)].copy()
+        ratings["anime_idx"] = ratings["anime_id"].map(anime_idx_map)
 
-        unique_anime_ids = ratings["anime_id"].unique()
-        faiss_ids = np.array(
-            [mal_id_to_faiss_id[a] for a in unique_anime_ids], dtype=np.int64
+        counts = ratings.groupby("user_id").size()
+        active = counts[counts >= self.config.min_ratings].index
+        ratings = ratings[ratings["user_id"].isin(active)]
+
+        user_means = ratings.groupby("user_id")["rating"].transform("mean")
+        ratings["centered"] = ratings["rating"] - user_means
+
+        user_ids = ratings["user_id"].unique()
+        user_idx_map = {int(uid): i for i, uid in enumerate(user_ids)}
+        ratings["user_idx"] = ratings["user_id"].map(user_idx_map)
+
+        n_users = len(user_ids)
+        n_anime = tfidf_matrix.shape[0]
+
+        R = csr_matrix(
+            (
+                ratings["centered"].astype(np.float32),
+                (ratings["user_idx"].values, ratings["anime_idx"].values),
+            ),
+            shape=(n_users, n_anime),
         )
-        anime_vectors = np.vstack(
-            [content_index.reconstruct(int(i)) for i in faiss_ids]
-        ).astype("float32")
-        anime_id_to_vec = dict(zip(unique_anime_ids, anime_vectors))
 
-        user_ids_list: list[int] = []
-        user_vectors_list: list[np.ndarray] = []
-        for user_id, group in ratings.groupby("user_id", sort=False):
-            vecs = np.stack([anime_id_to_vec[a] for a in group["anime_id"].to_numpy()])
-            r = group["rating"].to_numpy(dtype="float32")
-            user_ids_list.append(int(user_id))  # type: ignore[arg-type]
-            user_vectors_list.append((vecs * r[:, None]).sum(axis=0) / r.sum())
+        user_vectors_sparse = R @ tfidf_matrix
+        user_vectors_sparse = normalize(user_vectors_sparse, norm="l2", axis=1)
 
-        user_ids = np.array(user_ids_list)
-        user_matrix = np.vstack(user_vectors_list).astype("float32")
-        user_matrix = normalize(user_matrix)
+        dim = user_vectors_sparse.shape[1]
+        index = faiss.IndexFlatIP(dim)
+        chunk = self.config.chunk_size
+        for start in range(0, n_users, chunk):
+            end = min(start + chunk, n_users)
+            block = user_vectors_sparse[start:end].toarray().astype(np.float32)
+            index.add(block)
 
-        index = faiss.IndexHNSWFlat(user_matrix.shape[1], self.hnsw_m, faiss.METRIC_INNER_PRODUCT)
-        index.hnsw.efConstruction = self.ef_construction
-        index.add(user_matrix)
+        avg_vec = np.asarray(user_vectors_sparse.mean(axis=0)).astype(np.float32)
+        avg_vec = avg_vec / (np.linalg.norm(avg_vec) + 1e-12)
+        avg_idx = index.ntotal
+        index.add(avg_vec.reshape(1, -1))
 
-        self.user_ids = user_ids
-        self.user_matrix = user_matrix
+        user_id_to_idx = {int(uid): int(i) for uid, i in user_idx_map.items()}
+        all_user_ids = set(users_df["user_id"].astype(int).tolist())
+        cold = all_user_ids - set(user_id_to_idx.keys())
+        for uid in cold:
+            user_id_to_idx[int(uid)] = int(avg_idx)
+
         self.index = index
-        self.user_id_to_faiss_id = {int(u): int(i) for i, u in enumerate(user_ids)}
+        self.user_id_to_idx = user_id_to_idx
+        self.idx_to_user_id = {i: uid for uid, i in user_idx_map.items()}
+        self.user_vectors_sparse = user_vectors_sparse
+        self.avg_idx = avg_idx
         return self
 
     def save(self) -> UserBasedRecommenderArtifact:
-        assert self.index is not None and self.user_matrix is not None and self.user_ids is not None
         out_dir = self.config.user_based_dir
-        os.makedirs(out_dir, exist_ok=True)
-
         index_path = os.path.join(out_dir, USER_INDEX_FILE)
-        user_id_to_faiss_path = os.path.join(out_dir, USER_ID_TO_FAISS_FILE)
-        user_id_to_vector_path = os.path.join(out_dir, USER_ID_TO_VECTOR_FILE)
+        user_id_to_idx_path = os.path.join(out_dir, USER_ID_TO_IDX_FILE)
 
         faiss.write_index(self.index, index_path)
-        with open(user_id_to_faiss_path, "w", encoding="utf-8") as f:
-            json.dump(self.user_id_to_faiss_id, f)
-
-        user_id_to_vector = {
-            int(u): self.user_matrix[i].tolist() for i, u in enumerate(self.user_ids)
-        }
-        with open(user_id_to_vector_path, "w", encoding="utf-8") as f:
-            json.dump(user_id_to_vector, f)
+        with open(user_id_to_idx_path, "w", encoding="utf-8") as f:
+            json.dump(self.user_id_to_idx, f)
 
         return UserBasedRecommenderArtifact(
             user_based_dir=out_dir,
             index_path=index_path,
-            user_id_to_faiss_path=user_id_to_faiss_path,
-            user_id_to_vector_path=user_id_to_vector_path,
+            user_id_to_idx_path=user_id_to_idx_path,
         )
 
     def run(
         self,
         ratings_df: pd.DataFrame,
-        content_artifact: ContentBasedRecommenderArtifact,
+        users_df: pd.DataFrame,
+        content: ContentBasedRecommender,
     ) -> UserBasedRecommenderArtifact:
-        self.fit(ratings_df, content_artifact)
+        self.fit(ratings_df, users_df, content)
         return self.save()
 
-    def recommend_similar_users(self, user_id: int, n: int = 5) -> pd.DataFrame | None:
-        assert self.index is not None and self.user_matrix is not None and self.user_ids is not None
-        user_id = int(user_id)
-        if user_id not in self.user_id_to_faiss_id:
-            print(f"User {user_id} not found.")
-            return None
+    def similar_users(self, user_id: int, k: int = 10) -> pd.DataFrame:
+        u_idx = self.user_id_to_idx.get(int(user_id))
+        if u_idx is None:
+            raise ValueError(f"user_id {user_id} not found")
+        if u_idx == self.avg_idx:
+            raise ValueError(f"user_id {user_id} is cold; no neighbors available")
 
-        query_idx = self.user_id_to_faiss_id[user_id]
-        query_vec = self.user_matrix[query_idx : query_idx + 1]
-        distances, indices = self.index.search(query_vec, n + 1)
+        query = self.user_vectors_sparse[u_idx].toarray().astype(np.float32)
+        sims, nbrs = self.index.search(query, k + 5)
+        rows = []
+        for s, ni in zip(sims[0], nbrs[0]):
+            if ni == -1 or ni == u_idx or ni == self.avg_idx:
+                continue
+            uid = self.idx_to_user_id.get(int(ni))
+            if uid is None:
+                continue
+            rows.append({"user_id": int(uid), "similarity": float(s)})
+            if len(rows) == k:
+                break
+        return pd.DataFrame(rows)
 
-        top_indices = [i for i in indices[0] if i != query_idx][:n]
-        sim_scores = [d for i, d in zip(indices[0], distances[0]) if i != query_idx][:n]
 
-        return pd.DataFrame(
-            {
-                "user_id": [int(self.user_ids[i]) for i in top_indices],
-                "similarity": np.round(sim_scores, 3),
-            }
-        ).reset_index(drop=True)
+class CFRecommender:
+    """User-based collaborative filtering: user -> top anime via neighbors' ratings."""
 
+    def __init__(self, config: CFRecommenderConfig | None = None):
+        self.config = config or CFRecommenderConfig()
+        os.makedirs(self.config.cf_dir, exist_ok=True)
 
-class HybridRecommender:
-    def __init__(self, config: HybridRecommenderConfig | None = None):
-        self.config = config or HybridRecommenderConfig()
-        self.similar_users_k = self.config.similar_users_k
-        self.top_k = self.config.top_k
-
-        self.ratings_csr: csr_matrix | None = None
-        self.user_index: faiss.Index | None = None
-        self.mal_id_to_aidx: dict[int, int] = {}
-        self.aidx_to_mal_id: dict[int, int] = {}
-        self.user_id_to_uidx: dict[int, int] = {}
-        self.anime_titles: dict[int, str] = {}
-
-    def _load_maps(
-        self,
-        content_artifact: ContentBasedRecommenderArtifact,
-        user_artifact: UserBasedRecommenderArtifact,
-    ) -> None:
-        with open(content_artifact.mal_to_faiss_path, "r", encoding="utf-8") as f:
-            self.mal_id_to_aidx = {int(k): int(v) for k, v in json.load(f).items()}
-        self.aidx_to_mal_id = {v: k for k, v in self.mal_id_to_aidx.items()}
-
-        with open(user_artifact.user_id_to_faiss_path, "r", encoding="utf-8") as f:
-            self.user_id_to_uidx = {int(k): int(v) for k, v in json.load(f).items()}
-
-        self.user_index = faiss.read_index(user_artifact.index_path)
+        self.user_based: UserBasedRecommender | None = None
+        self.anime_df: pd.DataFrame | None = None
+        self.user_anime_ratings_df: pd.DataFrame | None = None
+        self.ratings_df: pd.DataFrame | None = None
 
     def fit(
         self,
+        user_based: UserBasedRecommender,
+        anime_df: pd.DataFrame,
+        user_anime_ratings_df: pd.DataFrame,
         ratings_df: pd.DataFrame,
-        content_artifact: ContentBasedRecommenderArtifact,
-        user_artifact: UserBasedRecommenderArtifact,
-        anime_titles: dict[int, str] | None = None,
-    ) -> "HybridRecommender":
-        self._load_maps(content_artifact, user_artifact)
-        self.anime_titles = anime_titles or {}
-
-        df = ratings_df[ratings_df["rating"] > 0]
-        df = df[df["anime_id"].isin(self.mal_id_to_aidx)]
-        df = df[df["user_id"].isin(self.user_id_to_uidx)]
-
-        rows = df["user_id"].map(self.user_id_to_uidx).to_numpy()
-        cols = df["anime_id"].map(self.mal_id_to_aidx).to_numpy()
-        data = df["rating"].to_numpy(dtype="float32") / 10.0
-
-        n_users = len(self.user_id_to_uidx)
-        n_anime = len(self.mal_id_to_aidx)
-        self.ratings_csr = csr_matrix((data, (rows, cols)), shape=(n_users, n_anime))
+    ) -> "CFRecommender":
+        self.user_based = user_based
+        self.anime_df = anime_df
+        self.user_anime_ratings_df = user_anime_ratings_df
+        self.ratings_df = ratings_df
         return self
 
-    def save(self) -> HybridRecommenderArtifact:
-        assert self.ratings_csr is not None
-        out_dir = self.config.hybrid_dir
-        os.makedirs(out_dir, exist_ok=True)
-
-        ratings_matrix_path = os.path.join(out_dir, HYBRID_RATINGS_MATRIX_FILE)
-        save_npz(ratings_matrix_path, self.ratings_csr)
-
-        return HybridRecommenderArtifact(
-            hybrid_dir=out_dir,
-            ratings_matrix_path=ratings_matrix_path,
-        )
-
-    def load(
-        self,
-        content_artifact: ContentBasedRecommenderArtifact,
-        user_artifact: UserBasedRecommenderArtifact,
-        hybrid_artifact: HybridRecommenderArtifact,
-        anime_titles: dict[int, str] | None = None,
-    ) -> "HybridRecommender":
-        self._load_maps(content_artifact, user_artifact)
-        self.ratings_csr = load_npz(hybrid_artifact.ratings_matrix_path)
-        self.anime_titles = anime_titles or {}
-        return self
+    def save(self) -> CFRecommenderArtifact:
+        return CFRecommenderArtifact(cf_dir=self.config.cf_dir)
 
     def run(
         self,
+        user_based: UserBasedRecommender,
+        anime_df: pd.DataFrame,
+        user_anime_ratings_df: pd.DataFrame,
         ratings_df: pd.DataFrame,
-        content_artifact: ContentBasedRecommenderArtifact,
-        user_artifact: UserBasedRecommenderArtifact,
-        anime_titles: dict[int, str] | None = None,
-    ) -> HybridRecommenderArtifact:
-        self.fit(ratings_df, content_artifact, user_artifact, anime_titles)
+    ) -> CFRecommenderArtifact:
+        self.fit(user_based, anime_df, user_anime_ratings_df, ratings_df)
         return self.save()
 
-    def recommend(
-        self,
-        user_id: int,
-        top_k: int | None = None,
-        k_users: int | None = None,
-    ) -> pd.DataFrame:
-        assert self.ratings_csr is not None and self.user_index is not None
-        top_k = top_k or self.top_k
-        k_users = k_users or self.similar_users_k
+    def recommend(self, user_id: int) -> pd.DataFrame:
+        ub = self.user_based
+        cfg = self.config
+        u_idx = ub.user_id_to_idx.get(int(user_id))
+        if u_idx is None:
+            raise ValueError(f"user_id {user_id} not found")
+        if u_idx == ub.avg_idx:
+            raise ValueError(f"user_id {user_id} is cold; use a fallback recommender")
 
-        user_id = int(user_id)
-        if user_id not in self.user_id_to_uidx:
-            raise KeyError(f"user {user_id} not in index")
+        query = ub.user_vectors_sparse[u_idx].toarray().astype(np.float32)
+        sims, nbr_idxs = ub.index.search(query, cfg.k_neighbors + 5)
+        sims, nbr_idxs = sims[0], nbr_idxs[0]
 
-        uidx = self.user_id_to_uidx[user_id]
-        query_vec = self.user_index.reconstruct(uidx).reshape(1, -1)
+        neighbor_ids, neighbor_sims = [], []
+        for s, ni in zip(sims, nbr_idxs):
+            if ni == -1 or ni == u_idx or ni == ub.avg_idx:
+                continue
+            nid = ub.idx_to_user_id.get(int(ni))
+            if nid is None:
+                continue
+            neighbor_ids.append(nid)
+            neighbor_sims.append(float(s))
+            if len(neighbor_ids) == cfg.k_neighbors:
+                break
 
-        sims, peers = self.user_index.search(query_vec, k_users + 1)
-        mask = peers[0] != uidx
-        peer_idx = peers[0][mask][:k_users]
-        peer_sim = sims[0][mask][:k_users].astype("float32")
+        sim_map = dict(zip(neighbor_ids, neighbor_sims))
+        uar = self.user_anime_ratings_df
+        seen = set(uar.loc[uar["user_id"] == user_id, "anime_id"].tolist())
 
-        scores = peer_sim @ self.ratings_csr[peer_idx]
-        scores = np.asarray(scores).ravel()
+        nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
+        nbr["sim"] = nbr["user_id"].map(sim_map)
+        nbr["w_rating"] = nbr["rating"] * nbr["sim"]
 
-        support = np.asarray((self.ratings_csr[peer_idx] > 0).sum(axis=0)).ravel()
-
-        seen = self.ratings_csr.getrow(uidx).indices
-        scores[seen] = -np.inf
-
-        top = np.argpartition(-scores, top_k)[:top_k]
-        top = top[np.argsort(-scores[top])]
-
-        return pd.DataFrame(
-            {
-                "mal_id": [self.aidx_to_mal_id[i] for i in top],
-                "title": [self.anime_titles.get(self.aidx_to_mal_id[i], str(self.aidx_to_mal_id[i])) for i in top],
-                "score": scores[top],
-                "support": support[top],
-            }
+        agg = nbr.groupby("anime_id").agg(
+            num_neighbors=("user_id", "size"),
+            weighted_sum=("w_rating", "sum"),
+            sim_sum=("sim", "sum"),
         )
+        agg = agg[agg["num_neighbors"] >= cfg.min_support]
+        agg["score"] = agg["weighted_sum"] / agg["sim_sum"]
+
+        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
+            reliable = set(
+                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
+            )
+            agg = agg[agg.index.isin(reliable)]
+
+        recs = (
+            agg.sort_values("score", ascending=False)
+            .head(cfg.top_n)
+            .reset_index()
+            .merge(
+                self.anime_df[["anime_id", "title", "genres", "era"]],
+                on="anime_id",
+                how="left",
+            )
+        )
+        return recs[["anime_id", "title", "genres", "era", "score", "num_neighbors"]]
+
+
+class HybridRecommender:
+    """Blend CF score (neighbor-weighted ratings) with content similarity score."""
+
+    def __init__(self, config: HybridRecommenderConfig | None = None):
+        self.config = config or HybridRecommenderConfig()
+        os.makedirs(self.config.hybrid_dir, exist_ok=True)
+
+        self.content: ContentBasedRecommender | None = None
+        self.user_based: UserBasedRecommender | None = None
+        self.anime_df: pd.DataFrame | None = None
+        self.user_anime_ratings_df: pd.DataFrame | None = None
+        self.ratings_df: pd.DataFrame | None = None
+
+    def fit(
+        self,
+        content: ContentBasedRecommender,
+        user_based: UserBasedRecommender,
+        anime_df: pd.DataFrame,
+        user_anime_ratings_df: pd.DataFrame,
+        ratings_df: pd.DataFrame,
+    ) -> "HybridRecommender":
+        self.content = content
+        self.user_based = user_based
+        self.anime_df = anime_df
+        self.user_anime_ratings_df = user_anime_ratings_df
+        self.ratings_df = ratings_df
+        return self
+
+    def save(self) -> HybridRecommenderArtifact:
+        return HybridRecommenderArtifact(hybrid_dir=self.config.hybrid_dir)
+
+    def run(
+        self,
+        content: ContentBasedRecommender,
+        user_based: UserBasedRecommender,
+        anime_df: pd.DataFrame,
+        user_anime_ratings_df: pd.DataFrame,
+        ratings_df: pd.DataFrame,
+    ) -> HybridRecommenderArtifact:
+        self.fit(content, user_based, anime_df, user_anime_ratings_df, ratings_df)
+        return self.save()
+
+    @staticmethod
+    def _minmax(s: pd.Series) -> pd.Series:
+        s = s.astype("float32")
+        lo, hi = s.min(skipna=True), s.max(skipna=True)
+        if pd.isna(lo) or hi == lo:
+            return s.fillna(0.0) * 0.0
+        return ((s - lo) / (hi - lo)).fillna(0.0)
+
+    def recommend(self, user_id: int) -> pd.DataFrame:
+        ub = self.user_based
+        cb = self.content
+        cfg = self.config
+
+        u_idx = ub.user_id_to_idx.get(int(user_id))
+        if u_idx is None:
+            raise ValueError(f"user_id {user_id} not found")
+
+        is_cold = u_idx == ub.avg_idx
+        user_vec = ub.user_vectors_sparse[u_idx].toarray().astype(np.float32) if not is_cold \
+            else ub.index.reconstruct(ub.avg_idx).reshape(1, -1)
+
+        cf_scores = pd.Series(dtype="float32", name="cf_score")
+        seen: set = set()
+
+        if not is_cold:
+            sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
+            sims, nbr_idxs = sims[0], nbr_idxs[0]
+            neighbor_ids, neighbor_sims = [], []
+            for s, ni in zip(sims, nbr_idxs):
+                if ni == -1 or ni == u_idx or ni == ub.avg_idx:
+                    continue
+                nid = ub.idx_to_user_id.get(int(ni))
+                if nid is None:
+                    continue
+                neighbor_ids.append(nid)
+                neighbor_sims.append(float(s))
+                if len(neighbor_ids) == cfg.k_neighbors:
+                    break
+            sim_map = dict(zip(neighbor_ids, neighbor_sims))
+
+            uar = self.user_anime_ratings_df
+            seen = set(uar.loc[uar["user_id"] == user_id, "anime_id"].tolist())
+
+            nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
+            nbr["sim"] = nbr["user_id"].map(sim_map)
+            nbr["w_rating"] = nbr["rating"] * nbr["sim"]
+
+            agg = nbr.groupby("anime_id").agg(
+                num_neighbors=("user_id", "size"),
+                weighted_sum=("w_rating", "sum"),
+                sim_sum=("sim", "sum"),
+            )
+            agg = agg[agg["num_neighbors"] >= cfg.min_support]
+            cf_scores = (agg["weighted_sum"] / agg["sim_sum"]).rename("cf_score")
+
+        c_scores_raw, c_idxs = cb.index.search(user_vec, cfg.content_pool)
+        c_scores_raw, c_idxs = c_scores_raw[0], c_idxs[0]
+        content_rows = []
+        for s, ai in zip(c_scores_raw, c_idxs):
+            if ai == -1:
+                continue
+            aid = cb.idx_to_anime_id[int(ai)]
+            if aid in seen:
+                continue
+            content_rows.append((aid, float(s)))
+        content_scores = pd.Series(dict(content_rows), name="content_score", dtype="float32")
+
+        candidates = pd.concat([cf_scores, content_scores], axis=1)
+
+        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
+            reliable = set(
+                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
+            )
+            candidates = candidates[candidates.index.isin(reliable)]
+
+        candidates["cf_n"] = self._minmax(candidates["cf_score"])
+        candidates["content_n"] = self._minmax(candidates["content_score"])
+
+        effective_alpha = 0.0 if is_cold else cfg.alpha
+        candidates["final_score"] = (
+            effective_alpha * candidates["cf_n"]
+            + (1 - effective_alpha) * candidates["content_n"]
+        )
+
+        out = (
+            candidates.sort_values("final_score", ascending=False)
+            .head(cfg.top_n)
+            .reset_index()
+            .rename(columns={"index": "anime_id"})
+            .merge(
+                self.anime_df[["anime_id", "title", "genres", "era"]],
+                on="anime_id",
+                how="left",
+            )
+        )
+        return out[["anime_id", "title", "genres", "era", "final_score", "cf_score", "content_score"]]

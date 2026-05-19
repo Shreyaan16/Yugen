@@ -1,17 +1,26 @@
 content_based:
-  max_features: 15000
-  n_components: 256
-  hnsw_m: 32
-  ef_construction: 200
+  max_features: 20000
+  ngram_range: [1, 2]
+  min_df: 2
   random_state: 42
 
 user_based:
-  hnsw_m: 32
-  ef_construction: 200
+  min_ratings: 0
+  chunk_size: 5000
+
+cf:
+  k_neighbors: 50
+  top_n: 10
+  min_support: 3
+  min_num_ratings: 50
 
 hybrid:
-  similar_users_k: 50
-  top_k: 10
+  k_neighbors: 50
+  top_n: 10
+  alpha: 0.6
+  min_support: 3
+  min_num_ratings: 50
+  content_pool: 500
 
 evaluation:
   top_k: 10
