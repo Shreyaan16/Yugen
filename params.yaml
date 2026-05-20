@@ -8,19 +8,11 @@ user_based:
   min_ratings: 0
   chunk_size: 5000
 
-cf:
-  k_neighbors: 50
-  top_n: 10
-  min_support: 3
-  min_num_ratings: 50
-
 hybrid:
   k_neighbors: 50
   top_n: 10
-  alpha: 0.6
-  min_support: 3
+  neighbor_rating_threshold: 7.0
   min_num_ratings: 50
-  content_pool: 500
 
 evaluation:
   top_k: 10

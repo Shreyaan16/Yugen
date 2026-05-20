@@ -7,15 +7,14 @@ from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 
 from src.constants import (
-    EVAL_CF_METRICS_FILE,
     EVAL_HYBRID_METRICS_FILE,
     EVAL_SUMMARY_FILE,
     PARAMS_PATH,
     EXPT_NAME,
 )
-from src.entity.config_entity import (CFRecommenderConfig, EvaluationConfig, HybridRecommenderConfig,)
+from src.entity.config_entity import (EvaluationConfig, HybridRecommenderConfig,)
 from src.entity.artifact_entity import EvaluationArtifact
-from src.components.recommender import (ContentBasedRecommender, UserBasedRecommender, CFRecommender, HybridRecommender)
+from src.components.recommender import (ContentBasedRecommender, UserBasedRecommender, HybridRecommender)
 from src.utils import read_yaml
 
 
@@ -26,21 +25,18 @@ class Evaluation:
 
         self.content: ContentBasedRecommender | None = None
         self.user_based: UserBasedRecommender | None = None
-        self.cf: CFRecommender | None = None
         self.hybrid: HybridRecommender | None = None
         self.anime_df: pd.DataFrame | None = None
         self.user_anime_ratings_df: pd.DataFrame | None = None
         self.ratings_df: pd.DataFrame | None = None
 
-        self._cf_cfg = CFRecommenderConfig()
         self._hy_cfg = HybridRecommenderConfig()
 
-    def fit(self, content: ContentBasedRecommender, user_based: UserBasedRecommender, cf: CFRecommender,
+    def fit(self, content: ContentBasedRecommender, user_based: UserBasedRecommender,
         hybrid: HybridRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame,
         ratings_df: pd.DataFrame,) -> "Evaluation":
         self.content = content
         self.user_based = user_based
-        self.cf = cf
         self.hybrid = hybrid
         self.anime_df = anime_df
         self.user_anime_ratings_df = user_anime_ratings_df
@@ -69,61 +65,8 @@ class Evaluation:
         user_vec_sparse = normalize(user_vec_sparse, norm="l2", axis=1)
         return user_vec_sparse.toarray().astype(np.float32)
 
-    def _cf_top_k(self, user_id: int, user_vec: np.ndarray, seen: set, k: int) -> list[int]:
-        ub = self.user_based
-        cfg = self._cf_cfg
-        self_idx = ub.user_id_to_idx.get(int(user_id))
-
-        sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
-        sims, nbr_idxs = sims[0], nbr_idxs[0]
-
-        neighbor_ids, neighbor_sims = [], []
-        for s, ni in zip(sims, nbr_idxs):
-            if ni == -1 or ni == ub.avg_idx or ni == self_idx:
-                continue
-            nid = ub.idx_to_user_id.get(int(ni))
-            if nid is None:
-                continue
-            neighbor_ids.append(nid)
-            neighbor_sims.append(float(s))
-            if len(neighbor_ids) == cfg.k_neighbors:
-                break
-        if not neighbor_ids:
-            return []
-
-        sim_map = dict(zip(neighbor_ids, neighbor_sims))
-        uar = self.user_anime_ratings_df
-        nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
-        if len(nbr) == 0:
-            return []
-        nbr["sim"] = nbr["user_id"].map(sim_map)
-
-        # Center each neighbor's rating against their own mean (over all their ratings),
-        # so the score reflects "lift above this user's personal baseline" rather than
-        # raw rating level. Avoids the score collapsing onto globally-popular anime.
-        neighbor_means = uar[uar["user_id"].isin(sim_map)].groupby("user_id")["rating"].mean()
-        nbr["centered"] = nbr["rating"] - nbr["user_id"].map(neighbor_means)
-        nbr["w_centered"] = nbr["centered"] * nbr["sim"]
-
-        agg = nbr.groupby("anime_id").agg(
-            num_neighbors=("user_id", "size"),
-            weighted_sum=("w_centered", "sum"),
-            sim_sum=("sim", "sum"),
-        )
-        agg = agg[agg["num_neighbors"] >= cfg.min_support]
-        if len(agg) == 0:
-            return []
-        agg["score"] = agg["weighted_sum"] / agg["sim_sum"]
-
-        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
-            reliable = set(
-                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
-            )
-            agg = agg[agg.index.isin(reliable)]
-
-        return agg["score"].sort_values(ascending=False).head(k).index.tolist()
-
     def _hybrid_top_k(self, user_id: int, user_vec: np.ndarray, seen: set, k: int) -> list[int]:
+        """New hybrid: CF neighbors define candidate pool, content sim ranks it."""
         cb = self.content
         ub = self.user_based
         cfg = self._hy_cfg
@@ -131,7 +74,7 @@ class Evaluation:
 
         sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
         sims, nbr_idxs = sims[0], nbr_idxs[0]
-        neighbor_ids, neighbor_sims = [], []
+        neighbor_ids: list[int] = []
         for s, ni in zip(sims, nbr_idxs):
             if ni == -1 or ni == ub.avg_idx or ni == self_idx:
                 continue
@@ -139,62 +82,33 @@ class Evaluation:
             if nid is None:
                 continue
             neighbor_ids.append(nid)
-            neighbor_sims.append(float(s))
             if len(neighbor_ids) == cfg.k_neighbors:
                 break
+        if not neighbor_ids:
+            return []
 
-        cf_scores = pd.Series(dtype="float32", name="cf_score")
-        if neighbor_ids:
-            sim_map = dict(zip(neighbor_ids, neighbor_sims))
-            uar = self.user_anime_ratings_df
-            nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
-            if len(nbr) > 0:
-                nbr["sim"] = nbr["user_id"].map(sim_map)
-                neighbor_means = uar[uar["user_id"].isin(sim_map)].groupby("user_id")["rating"].mean()
-                nbr["centered"] = nbr["rating"] - nbr["user_id"].map(neighbor_means)
-                nbr["w_centered"] = nbr["centered"] * nbr["sim"]
-                agg = nbr.groupby("anime_id").agg(
-                    num_neighbors=("user_id", "size"),
-                    weighted_sum=("w_centered", "sum"),
-                    sim_sum=("sim", "sum"),
-                )
-                agg = agg[agg["num_neighbors"] >= cfg.min_support]
-                cf_scores = (agg["weighted_sum"] / agg["sim_sum"]).rename("cf_score")
+        uar = self.user_anime_ratings_df
+        pool_rows = uar[
+            uar["user_id"].isin(neighbor_ids)
+            & (uar["rating"] >= cfg.neighbor_rating_threshold)
+            & ~uar["anime_id"].isin(seen)
+        ]
+        pool = pool_rows["anime_id"].unique().tolist()
 
-        c_scores_raw, c_idxs = cb.index.search(user_vec, cfg.content_pool)
-        c_scores_raw, c_idxs = c_scores_raw[0], c_idxs[0]
-        rows = []
-        for s, ai in zip(c_scores_raw, c_idxs):
-            if ai == -1:
-                continue
-            aid = cb.idx_to_anime_id[int(ai)]
-            if aid in seen:
-                continue
-            rows.append((aid, float(s)))
-        content_scores = pd.Series(dict(rows), name="content_score", dtype="float32")
-
-        candidates = pd.concat([cf_scores, content_scores], axis=1)
         if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
             reliable = set(
                 self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
             )
-            candidates = candidates[candidates.index.isin(reliable)]
-        if len(candidates) == 0:
+            pool = [aid for aid in pool if aid in reliable]
+        pool = [aid for aid in pool if aid in cb.anime_id_to_idx]
+        if not pool:
             return []
 
-        def minmax(s):
-            s = s.astype("float32")
-            lo, hi = s.min(skipna=True), s.max(skipna=True)
-            if pd.isna(lo) or hi == lo:
-                return s.fillna(0.0) * 0.0
-            return ((s - lo) / (hi - lo)).fillna(0.0)
-
-        candidates["cf_n"] = minmax(candidates["cf_score"])
-        candidates["content_n"] = minmax(candidates["content_score"])
-        candidates["final_score"] = (
-            cfg.alpha * candidates["cf_n"] + (1 - cfg.alpha) * candidates["content_n"]
-        )
-        return candidates["final_score"].sort_values(ascending=False).head(k).index.tolist()
+        pool_idxs = np.array([cb.anime_id_to_idx[aid] for aid in pool], dtype=np.int64)
+        pool_vecs = cb.vectors[pool_idxs]
+        scores = pool_vecs @ user_vec.ravel().astype(np.float32)
+        order = np.argsort(-scores)[:k]
+        return [pool[i] for i in order]
 
     @staticmethod
     def _metrics(recs: list[int], relevant: set, k: int) -> dict:
@@ -230,13 +144,11 @@ class Evaluation:
             return None
 
         seen = set(train["anime_id"].tolist())
-        cf_recs = self._cf_top_k(user_id, user_vec, seen, cfg.top_k)
         hybrid_recs = self._hybrid_top_k(user_id, user_vec, seen, cfg.top_k)
 
         return {
             "user_id": int(user_id),
             "n_relevant": len(relevant),
-            "cf": self._metrics(cf_recs, relevant, cfg.top_k),
             "hybrid": self._metrics(hybrid_recs, relevant, cfg.top_k),
         }
 
@@ -264,16 +176,13 @@ class Evaluation:
                 flat[full_key] = value
         return flat
 
-    def _log_mlflow(self, params: dict, cf_metrics: dict, hybrid_metrics: dict) -> None:
+    def _log_mlflow(self, params: dict, hybrid_metrics: dict) -> None:
         mlflow.set_experiment(EXPT_NAME)
 
         flat_params = self._flatten_params(params)
         with mlflow.start_run(run_name="evaluation"):
             for key, value in flat_params.items():
                 mlflow.log_param(key, value)
-
-            for key, value in cf_metrics.items():
-                mlflow.log_metric(f"cf_{key.replace('@', '_at_')}", value)
 
             for key, value in hybrid_metrics.items():
                 mlflow.log_metric(f"hybrid_{key.replace('@', '_at_')}", value)
@@ -299,7 +208,6 @@ class Evaluation:
             if i % 50 == 0:
                 print(f"  evaluated {i}/{n_sample} (kept {len(per_user)})")
 
-        cf_metrics = self._aggregate(per_user, "cf")
         hybrid_metrics = self._aggregate(per_user, "hybrid")
         summary = {
             "config": {
@@ -310,31 +218,25 @@ class Evaluation:
                 "min_user_ratings": cfg.min_user_ratings,
                 "random_state": cfg.random_state,
             },
-            "cf": cf_metrics,
             "hybrid": hybrid_metrics,
         }
 
         out_dir = cfg.evaluation_dir
-        cf_path = os.path.join(out_dir, EVAL_CF_METRICS_FILE)
         hybrid_path = os.path.join(out_dir, EVAL_HYBRID_METRICS_FILE)
         summary_path = os.path.join(out_dir, EVAL_SUMMARY_FILE)
 
-        with open(cf_path, "w", encoding="utf-8") as f:
-            json.dump(cf_metrics, f, indent=2)
         with open(hybrid_path, "w", encoding="utf-8") as f:
             json.dump(hybrid_metrics, f, indent=2)
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
-        print(f"\nCF      : {cf_metrics}")
-        print(f"Hybrid  : {hybrid_metrics}")
+        print(f"\nHybrid  : {hybrid_metrics}")
 
         params = read_yaml(PARAMS_PATH) or {}
-        self._log_mlflow(params, cf_metrics, hybrid_metrics)
+        self._log_mlflow(params, hybrid_metrics)
 
         return EvaluationArtifact(
             evaluation_dir=out_dir,
-            cf_metrics_path=cf_path,
             hybrid_metrics_path=hybrid_path,
             summary_path=summary_path,
         )

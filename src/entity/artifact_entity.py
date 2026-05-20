@@ -32,11 +32,6 @@ class UserBasedRecommenderArtifact:
 
 
 @dataclass
-class CFRecommenderArtifact:
-    cf_dir: str
-
-
-@dataclass
 class HybridRecommenderArtifact:
     hybrid_dir: str
 
@@ -44,6 +39,5 @@ class HybridRecommenderArtifact:
 @dataclass
 class EvaluationArtifact:
     evaluation_dir: str
-    cf_metrics_path: str
     hybrid_metrics_path: str
     summary_path: str

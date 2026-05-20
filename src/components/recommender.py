@@ -8,8 +8,8 @@ from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 from src.constants import (CONTENT_INDEX_FILE, ANIME_ID_TO_IDX_FILE, TFIDF_VECTORIZER_FILE, USER_INDEX_FILE, USER_ID_TO_IDX_FILE)
-from src.entity.config_entity import (ContentBasedRecommenderConfig, UserBasedRecommenderConfig, CFRecommenderConfig, HybridRecommenderConfig)
-from src.entity.artifact_entity import (ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact,  CFRecommenderArtifact, HybridRecommenderArtifact)
+from src.entity.config_entity import (ContentBasedRecommenderConfig, UserBasedRecommenderConfig, HybridRecommenderConfig)
+from src.entity.artifact_entity import (ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact, HybridRecommenderArtifact)
 
 
 def _join_list(x):
@@ -241,86 +241,6 @@ class UserBasedRecommender:
         return pd.DataFrame(rows)
 
 
-class CFRecommender:
-    def __init__(self, config: CFRecommenderConfig | None = None):
-        self.config = config or CFRecommenderConfig()
-        os.makedirs(self.config.cf_dir, exist_ok=True)
-
-        self.user_based: UserBasedRecommender | None = None
-        self.anime_df: pd.DataFrame | None = None
-        self.user_anime_ratings_df: pd.DataFrame | None = None
-        self.ratings_df: pd.DataFrame | None = None
-
-    def fit(self, user_based: UserBasedRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame, ratings_df: pd.DataFrame,) -> "CFRecommender":
-        self.user_based = user_based
-        self.anime_df = anime_df
-        self.user_anime_ratings_df = user_anime_ratings_df
-        self.ratings_df = ratings_df
-        return self
-
-    def save(self) -> CFRecommenderArtifact:
-        return CFRecommenderArtifact(cf_dir=self.config.cf_dir)
-
-    def run(self, user_based: UserBasedRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame, ratings_df: pd.DataFrame) -> CFRecommenderArtifact:
-        self.fit(user_based, anime_df, user_anime_ratings_df, ratings_df)
-        return self.save()
-
-    def recommend(self, user_id: int) -> pd.DataFrame:
-        ub = self.user_based
-        cfg = self.config
-        u_idx = ub.user_id_to_idx.get(int(user_id))
-        if u_idx is None:
-            raise ValueError(f"user_id {user_id} not found")
-        if u_idx == ub.avg_idx:
-            raise ValueError(f"user_id {user_id} is cold; use a fallback recommender")
-
-        query = ub.user_vectors_sparse[u_idx].toarray().astype(np.float32)
-        sims, nbr_idxs = ub.index.search(query, cfg.k_neighbors + 5)
-        sims, nbr_idxs = sims[0], nbr_idxs[0]
-
-        neighbor_ids, neighbor_sims = [], []
-        for s, ni in zip(sims, nbr_idxs):
-            if ni == -1 or ni == u_idx or ni == ub.avg_idx:
-                continue
-            nid = ub.idx_to_user_id.get(int(ni))
-            if nid is None:
-                continue
-            neighbor_ids.append(nid)
-            neighbor_sims.append(float(s))
-            if len(neighbor_ids) == cfg.k_neighbors:
-                break
-
-        sim_map = dict(zip(neighbor_ids, neighbor_sims))
-        uar = self.user_anime_ratings_df
-        seen = set(uar.loc[uar["user_id"] == user_id, "anime_id"].tolist())
-
-        nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
-        nbr["sim"] = nbr["user_id"].map(sim_map)
-        nbr["w_rating"] = nbr["rating"] * nbr["sim"]
-
-        agg = nbr.groupby("anime_id").agg(num_neighbors=("user_id", "size"), weighted_sum=("w_rating", "sum"), sim_sum=("sim", "sum"))
-        agg = agg[agg["num_neighbors"] >= cfg.min_support]
-        agg["score"] = agg["weighted_sum"] / agg["sim_sum"]
-
-        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
-            reliable = set(
-                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
-            )
-            agg = agg[agg.index.isin(reliable)]
-
-        recs = (
-            agg.sort_values("score", ascending=False)
-            .head(cfg.top_n)
-            .reset_index()
-            .merge(
-                self.anime_df[["anime_id", "title", "genres", "era"]],
-                on="anime_id",
-                how="left",
-            )
-        )
-        return recs[["anime_id", "title", "genres", "era", "score", "num_neighbors"]]
-
-
 class HybridRecommender:
     def __init__(self, config: HybridRecommenderConfig | None = None):
         self.config = config or HybridRecommenderConfig()
@@ -349,17 +269,23 @@ class HybridRecommender:
         self.fit(content, user_based, anime_df, user_anime_ratings_df, ratings_df)
         return self.save()
 
-    @staticmethod
-    def _minmax(s: pd.Series) -> pd.Series:
-        s = s.astype("float32")
-        lo, hi = s.min(skipna=True), s.max(skipna=True)
-        if pd.isna(lo) or hi == lo:
-            return s.fillna(0.0) * 0.0
-        return ((s - lo) / (hi - lo)).fillna(0.0)
+    def _reliable_anime_ids(self) -> set | None:
+        cfg = self.config
+        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
+            return set(
+                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
+            )
+        return None
 
     def recommend(self, user_id: int) -> pd.DataFrame:
+        """
+        Two-stage hybrid:
+          1. CF candidate generation — top-k similar users supply a pool of anime
+             they rated >= neighbor_rating_threshold.
+          2. Content ranking — pool is ranked by cosine(user_taste_vec, anime_vec).
+        Cold users fall back to pure content search against the avg taste vector.
+        """
         ub = self.user_based
-        cb = self.content
         cfg = self.config
 
         u_idx = ub.user_id_to_idx.get(int(user_id))
@@ -367,81 +293,91 @@ class HybridRecommender:
             raise ValueError(f"user_id {user_id} not found")
 
         is_cold = u_idx == ub.avg_idx
-        user_vec = ub.user_vectors_sparse[u_idx].toarray().astype(np.float32) if not is_cold \
+        user_vec = (
+            ub.user_vectors_sparse[u_idx].toarray().astype(np.float32)
+            if not is_cold
             else ub.index.reconstruct(ub.avg_idx).reshape(1, -1)
-
-        cf_scores = pd.Series(dtype="float32", name="cf_score")
-        seen: set = set()
-
-        if not is_cold:
-            sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
-            sims, nbr_idxs = sims[0], nbr_idxs[0]
-            neighbor_ids, neighbor_sims = [], []
-            for s, ni in zip(sims, nbr_idxs):
-                if ni == -1 or ni == u_idx or ni == ub.avg_idx:
-                    continue
-                nid = ub.idx_to_user_id.get(int(ni))
-                if nid is None:
-                    continue
-                neighbor_ids.append(nid)
-                neighbor_sims.append(float(s))
-                if len(neighbor_ids) == cfg.k_neighbors:
-                    break
-            sim_map = dict(zip(neighbor_ids, neighbor_sims))
-
-            uar = self.user_anime_ratings_df
-            seen = set(uar.loc[uar["user_id"] == user_id, "anime_id"].tolist())
-
-            nbr = uar[uar["user_id"].isin(sim_map) & ~uar["anime_id"].isin(seen)].copy()
-            nbr["sim"] = nbr["user_id"].map(sim_map)
-            nbr["w_rating"] = nbr["rating"] * nbr["sim"]
-
-            agg = nbr.groupby("anime_id").agg(
-                num_neighbors=("user_id", "size"),
-                weighted_sum=("w_rating", "sum"),
-                sim_sum=("sim", "sum"),
-            )
-            agg = agg[agg["num_neighbors"] >= cfg.min_support]
-            cf_scores = (agg["weighted_sum"] / agg["sim_sum"]).rename("cf_score")
-
-        c_scores_raw, c_idxs = cb.index.search(user_vec, cfg.content_pool)
-        c_scores_raw, c_idxs = c_scores_raw[0], c_idxs[0]
-        content_rows = []
-        for s, ai in zip(c_scores_raw, c_idxs):
-            if ai == -1:
-                continue
-            aid = cb.idx_to_anime_id[int(ai)]
-            if aid in seen:
-                continue
-            content_rows.append((aid, float(s)))
-        content_scores = pd.Series(dict(content_rows), name="content_score", dtype="float32")
-
-        candidates = pd.concat([cf_scores, content_scores], axis=1)
-
-        if cfg.min_num_ratings > 0 and "num_ratings" in self.ratings_df.columns:
-            reliable = set(
-                self.ratings_df.loc[self.ratings_df["num_ratings"] >= cfg.min_num_ratings, "anime_id"]
-            )
-            candidates = candidates[candidates.index.isin(reliable)]
-
-        candidates["cf_n"] = self._minmax(candidates["cf_score"])
-        candidates["content_n"] = self._minmax(candidates["content_score"])
-
-        effective_alpha = 0.0 if is_cold else cfg.alpha
-        candidates["final_score"] = (
-            effective_alpha * candidates["cf_n"]
-            + (1 - effective_alpha) * candidates["content_n"]
         )
 
-        out = (
-            candidates.sort_values("final_score", ascending=False)
-            .head(cfg.top_n)
-            .reset_index()
-            .rename(columns={"index": "anime_id"})
-            .merge(
-                self.anime_df[["anime_id", "title", "genres", "era"]],
-                on="anime_id",
-                how="left",
-            )
+        uar = self.user_anime_ratings_df
+        seen = set(uar.loc[uar["user_id"] == user_id, "anime_id"].tolist())
+        reliable = self._reliable_anime_ids()
+
+        pool_aids, scores = self._score_pool(
+            user_vec=user_vec,
+            self_idx=u_idx,
+            seen=seen,
+            reliable=reliable,
+            is_cold=is_cold,
         )
-        return out[["anime_id", "title", "genres", "era", "final_score", "cf_score", "content_score"]]
+
+        if not pool_aids:
+            return pd.DataFrame(columns=["anime_id", "title", "genres", "era", "score"])
+
+        order = np.argsort(-scores)[: cfg.top_n]
+        recs = pd.DataFrame({
+            "anime_id": [pool_aids[i] for i in order],
+            "score": [float(scores[i]) for i in order],
+        })
+        return recs.merge(
+            self.anime_df[["anime_id", "title", "genres", "era"]],
+            on="anime_id",
+            how="left",
+        )[["anime_id", "title", "genres", "era", "score"]]
+
+    def _score_pool(self, user_vec: np.ndarray, self_idx: int | None, seen: set,
+                    reliable: set | None, is_cold: bool) -> tuple[list[int], np.ndarray]:
+        """Build candidate pool from CF neighbors, then score by content similarity."""
+        ub = self.user_based
+        cb = self.content
+        cfg = self.config
+
+        if is_cold:
+            # No neighbors → fall back to top-K content matches over the whole catalogue.
+            k_fetch = cfg.top_n + len(seen) + 50
+            scores_raw, idxs = cb.index.search(user_vec, k_fetch)
+            pool_aids, pool_scores = [], []
+            for s, ai in zip(scores_raw[0], idxs[0]):
+                if ai == -1:
+                    continue
+                aid = cb.idx_to_anime_id[int(ai)]
+                if aid in seen:
+                    continue
+                if reliable is not None and aid not in reliable:
+                    continue
+                pool_aids.append(aid)
+                pool_scores.append(float(s))
+            return pool_aids, np.array(pool_scores, dtype=np.float32)
+
+        sims, nbr_idxs = ub.index.search(user_vec, cfg.k_neighbors + 5)
+        sims, nbr_idxs = sims[0], nbr_idxs[0]
+        neighbor_ids: list[int] = []
+        for s, ni in zip(sims, nbr_idxs):
+            if ni == -1 or ni == self_idx or ni == ub.avg_idx:
+                continue
+            nid = ub.idx_to_user_id.get(int(ni))
+            if nid is None:
+                continue
+            neighbor_ids.append(nid)
+            if len(neighbor_ids) == cfg.k_neighbors:
+                break
+        if not neighbor_ids:
+            return [], np.array([], dtype=np.float32)
+
+        uar = self.user_anime_ratings_df
+        pool_rows = uar[
+            uar["user_id"].isin(neighbor_ids)
+            & (uar["rating"] >= cfg.neighbor_rating_threshold)
+            & ~uar["anime_id"].isin(seen)
+        ]
+        pool = pool_rows["anime_id"].unique().tolist()
+        if reliable is not None:
+            pool = [aid for aid in pool if aid in reliable]
+        pool = [aid for aid in pool if aid in cb.anime_id_to_idx]
+        if not pool:
+            return [], np.array([], dtype=np.float32)
+
+        pool_idxs = np.array([cb.anime_id_to_idx[aid] for aid in pool], dtype=np.int64)
+        pool_vecs = cb.vectors[pool_idxs]
+        scores = pool_vecs @ user_vec.ravel().astype(np.float32)
+        return pool, scores.astype(np.float32)

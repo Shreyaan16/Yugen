@@ -30,7 +30,6 @@ DATA_PREPROCESSING_DIR_NAME: str = "data_preprocessing"
 RECOMMENDER_DIR_NAME: str = "recommender"
 CONTENT_BASED_DIR_NAME: str = "content_based"
 USER_BASED_DIR_NAME: str = "user_based"
-CF_DIR_NAME: str = "cf"
 HYBRID_DIR_NAME: str = "hybrid"
 EVALUATION_DIR_NAME: str = "evaluation"
 
@@ -47,7 +46,6 @@ TFIDF_VECTORIZER_FILE: str = "tfidf_vectorizer.pkl"
 USER_INDEX_FILE: str = "users.index"
 USER_ID_TO_IDX_FILE: str = "user_id_to_idx.json"
 
-EVAL_CF_METRICS_FILE: str = "cf_metrics.json"
 EVAL_HYBRID_METRICS_FILE: str = "hybrid_metrics.json"
 EVAL_SUMMARY_FILE: str = "summary.json"
 

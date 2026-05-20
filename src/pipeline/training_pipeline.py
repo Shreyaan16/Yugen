@@ -9,7 +9,6 @@ from src.components.data_preprocessing import DataPreprocessing
 from src.components.recommender import (
     ContentBasedRecommender,
     UserBasedRecommender,
-    CFRecommender,
     HybridRecommender,
 )
 from src.components.evaluation import Evaluation
@@ -25,7 +24,6 @@ from src.entity.config_entity import (
     DataPreprocessingConfig,
     ContentBasedRecommenderConfig,
     UserBasedRecommenderConfig,
-    CFRecommenderConfig,
     HybridRecommenderConfig,
     EvaluationConfig,
 )
@@ -71,19 +69,15 @@ class TrainingPipeline:
         user_based = UserBasedRecommender(UserBasedRecommenderConfig())
         user_based.run(uar_df, users_df, content)
 
-        cf = CFRecommender(CFRecommenderConfig())
-        cf.fit(user_based, anime_df, uar_df, ratings_df)
-        cf.save()
-
         hybrid = HybridRecommender(HybridRecommenderConfig())
         hybrid.fit(content, user_based, anime_df, uar_df, ratings_df)
         hybrid.save()
 
-        return content, user_based, cf, hybrid, anime_df, users_df, uar_df, ratings_df
+        return content, user_based, hybrid, anime_df, users_df, uar_df, ratings_df
 
-    def run_evaluation(self, content, user_based, cf, hybrid, anime_df, uar_df, ratings_df) -> str:
+    def run_evaluation(self, content, user_based, hybrid, anime_df, uar_df, ratings_df) -> str:
         evaluator = Evaluation(EvaluationConfig())
-        evaluator.fit(content, user_based, cf, hybrid, anime_df, uar_df, ratings_df)
+        evaluator.fit(content, user_based, hybrid, anime_df, uar_df, ratings_df)
         artifact = evaluator.run()
         return artifact.evaluation_dir
 
@@ -98,10 +92,10 @@ class TrainingPipeline:
         preproc_dir = self.run_data_preprocessing()
         print(f"Data preprocessed to {preproc_dir}")
 
-        content, user_based, cf, hybrid, anime_df, _, uar_df, ratings_df = self.run_recommenders(
+        content, user_based, hybrid, anime_df, _, uar_df, ratings_df = self.run_recommenders(
             preproc_cfg.data_preprocessing_dir, preproc_cfg.raw_data_dir
         )
         print("Recommenders trained")
 
-        eval_dir = self.run_evaluation(content, user_based, cf, hybrid, anime_df, uar_df, ratings_df)
+        eval_dir = self.run_evaluation(content, user_based, hybrid, anime_df, uar_df, ratings_df)
         print(f"Evaluation metrics saved to {eval_dir}")

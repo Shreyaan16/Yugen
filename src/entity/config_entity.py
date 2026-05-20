@@ -6,7 +6,6 @@ from src.utils import read_yaml
 _params = read_yaml(PARAMS_PATH)
 _cb = _params["content_based"]
 _ub = _params["user_based"]
-_cf = _params["cf"]
 _hy = _params["hybrid"]
 _ev = _params["evaluation"]
 
@@ -59,23 +58,12 @@ class UserBasedRecommenderConfig:
 
 
 @dataclass
-class CFRecommenderConfig:
-    cf_dir: str = os.path.join(_recommender_dir, CF_DIR_NAME)
-    k_neighbors: int = _cf["k_neighbors"]
-    top_n: int = _cf["top_n"]
-    min_support: int = _cf["min_support"]
-    min_num_ratings: int = _cf["min_num_ratings"]
-
-
-@dataclass
 class HybridRecommenderConfig:
     hybrid_dir: str = os.path.join(_recommender_dir, HYBRID_DIR_NAME)
     k_neighbors: int = _hy["k_neighbors"]
     top_n: int = _hy["top_n"]
-    alpha: float = _hy["alpha"]
-    min_support: int = _hy["min_support"]
+    neighbor_rating_threshold: float = _hy["neighbor_rating_threshold"]
     min_num_ratings: int = _hy["min_num_ratings"]
-    content_pool: int = _hy["content_pool"]
 
 
 @dataclass

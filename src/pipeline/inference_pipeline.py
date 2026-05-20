@@ -8,7 +8,6 @@ from scipy.sparse import csr_matrix
 from src.components.recommender import (
     ContentBasedRecommender,
     UserBasedRecommender,
-    CFRecommender,
     HybridRecommender,
 )
 from src.constants import (
@@ -21,7 +20,6 @@ from src.entity.config_entity import (
     DataPreprocessingConfig,
     ContentBasedRecommenderConfig,
     UserBasedRecommenderConfig,
-    CFRecommenderConfig,
     HybridRecommenderConfig,
 )
 
@@ -41,7 +39,6 @@ class InferencePipeline:
         self.ratings_df: pd.DataFrame | None = None
         self.content: ContentBasedRecommender | None = None
         self.user_based: UserBasedRecommender | None = None
-        self.cf: CFRecommender | None = None
         self.hybrid: HybridRecommender | None = None
 
     def _load_data(self) -> None:
@@ -67,9 +64,6 @@ class InferencePipeline:
         dense = self.user_based.index.reconstruct_n(0, n).astype(np.float32)
         self.user_based.user_vectors_sparse = csr_matrix(dense)
 
-        self.cf = CFRecommender(CFRecommenderConfig()).fit(
-            self.user_based, self.anime_df, self.uar_df, self.ratings_df
-        )
         self.hybrid = HybridRecommender(HybridRecommenderConfig()).fit(
             self.content, self.user_based, self.anime_df, self.uar_df, self.ratings_df
         )
@@ -91,9 +85,6 @@ class InferencePipeline:
 
         print(f"\nSimilar users for user {sample_uid}:")
         print(self.user_based.similar_users(sample_uid, k=5))
-
-        print(f"\nCF recs for user {sample_uid}:")
-        print(self.cf.recommend(sample_uid))
 
         print(f"\nHybrid recs for user {sample_uid}:")
         print(self.hybrid.recommend(sample_uid))

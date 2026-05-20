@@ -16,6 +16,5 @@ stages:
       - params.yaml:
           - content_based
           - user_based
-          - cf
           - hybrid
           - evaluation
