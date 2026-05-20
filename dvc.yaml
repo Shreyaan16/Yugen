@@ -1,39 +1,17 @@
 stages:
-  data_ingestion:
-    cmd: python -c "from src import pipeline; pipeline.stage_data_ingestion()"
+  training:
+    cmd: python -c "from src import pipeline; pipeline.stage_training()"
     deps:
       - src/pipeline/__init__.py
+      - src/pipeline/training_pipeline.py
+      - src/components/loading.py
       - src/components/data_ingestion.py
-
-  data_preprocessing:
-    cmd: python -c "from src import pipeline; pipeline.stage_data_preprocessing()"
-    deps:
-      - src/pipeline/__init__.py
       - src/components/data_preprocessing.py
+      - src/components/recommender.py
+      - src/components/evaluation.py
       - src/utils/__init__.py
       - src/config/cols_to_drop.yaml
       - src/config/feature_bins.yaml
-
-  recommenders:
-    cmd: python -c "from src import pipeline; pipeline.stage_recommenders()"
-    deps:
-      - src/pipeline/__init__.py
-      - src/components/recommender.py
-      - src/utils/__init__.py
-    params:
-      - params.yaml:
-          - content_based
-          - user_based
-          - cf
-          - hybrid
-          - evaluation
-
-  evaluation:
-    cmd: python -c "from src import pipeline; pipeline.stage_evaluation()"
-    deps:
-      - src/pipeline/__init__.py
-      - src/components/evaluation.py
-      - src/components/recommender.py
     params:
       - params.yaml:
           - content_based
