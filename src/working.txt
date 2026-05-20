@@ -1,0 +1,254 @@
+================================================================
+ YuGen — How each recommender works + how it's evaluated
+================================================================
+
+The whole system is built on two FAISS indices that share the same
+TF-IDF term space:
+  - anime index  (anime_id  -> 20k-dim TF-IDF vector)
+  - user index   (user_id   -> 20k-dim taste vector built from ratings)
+
+
+================================================================
+ 1. ContentBasedRecommender
+   Input:  anime_id
+   Output: list of similar anime
+================================================================
+
+HOW IT WORKS
+------------
+1. For each anime, build a "soup" string by concatenating:
+     title + synopsis + rating + ep_bin + dur_bin + era +
+     source + genres + producers + studios
+2. Fit TF-IDF on those soups
+     (max_features=20000, ngram_range=(1,2), min_df=2)
+   -> sparse matrix of shape (n_anime, 20000)
+3. L2-normalize every row so dot-product = cosine similarity.
+4. Build a FAISS IndexFlatIP (exact inner-product search) over
+   those vectors.
+
+QUERY
+-----
+Given anime_id -> look up its row -> FAISS top-K -> map row indices
+back to anime_ids.
+
+ARTIFACTS
+---------
+artifacts/recommender/content_based/
+  anime.index           FAISS index over anime vectors
+  anime_id_to_idx.json  anime_id -> row index
+  tfidf_vectorizer.pkl  fitted TF-IDF (needed to re-encode soups
+                        at inference + eval time)
+
+
+================================================================
+ 2. UserBasedRecommender
+   Input:  user_id
+   Output: list of similar users
+================================================================
+
+HOW IT WORKS
+------------
+A user is represented by the weighted sum of TF-IDF vectors of anime
+they rated, where the weights are the user's mean-centered ratings.
+Two users are similar if these aggregated taste vectors are similar.
+
+1. Center each user's ratings around their own mean
+     centered = rating - user_mean
+   So "rated 9 vs 5" matters more than absolute scale, and users who
+   rate everything 8 don't dominate.
+2. Build a sparse rating matrix R: shape (n_users, n_anime), filled
+   with centered ratings at the appropriate (user_idx, anime_idx)
+   cells.
+3. Compute user_vectors = R @ tfidf_matrix
+     shape (n_users, 20000)
+   Each row is the user's taste profile in the same term space as
+   the anime vectors.
+4. L2-normalize rows.
+5. Add to a FAISS IndexFlatIP, in chunks for memory.
+
+QUERY
+-----
+Given user_id -> get row index -> fetch user vec
+(via get_user_vec, see "Inference cost" below) -> FAISS top-K ->
+map back to user_ids.
+
+COLD START
+----------
+A "cold user" = a user_id known to the system but with no usable
+ratings (or too few to build a meaningful taste vec). Handled
+explicitly:
+
+1. After building user_vectors, an extra "avg vector" is appended
+   as the LAST row of the FAISS index. That vector is the mean of
+   all warm user vectors (then re-normalized).
+2. Every cold user_id is mapped to this last index position
+   (avg_idx) in user_id_to_idx.
+3. similar_users() refuses cold users (raises ValueError) because
+   "users similar to the average user" isn't meaningful.
+4. The Hybrid recommender silently treats cold users by using
+   user_vec = avg_vec via ub.get_user_vec(avg_idx), then falls back
+   to a pure-content search (see Hybrid section).
+
+So cold users get *some* recommendation (popular-mainstream taste),
+just not personalized.
+
+INFERENCE COST
+--------------
+After training, user_vectors_sparse is held in memory (n_users x
+20000 sparse matrix). Saving it to disk would be huge, so save()
+only persists the FAISS index + id map.
+
+After load(), user_vectors_sparse is None. Lookups go through
+ub.get_user_vec(u_idx):
+  - if user_vectors_sparse is set (post-training), slice the sparse
+    matrix.
+  - else (post-load) call index.reconstruct(u_idx) -- O(1) memory
+    read from FAISS's internal buffer.
+
+This means the inference-time process never builds the dense user
+matrix, saving ~n_users * dim * 4 bytes of RAM.
+
+ARTIFACTS
+---------
+artifacts/recommender/user_based/
+  users.index           FAISS index of user vectors + avg vec last
+  user_id_to_idx.json   user_id -> row index; cold users map to
+                        avg_idx (= index.ntotal - 1)
+
+
+================================================================
+ 3. HybridRecommender (current design)
+   Input:  user_id
+   Output: list of recommended anime
+================================================================
+
+HOW IT WORKS  --  two-stage: CF candidate generation -> content ranker
+----------------------------------------------------------------------
+1. CF candidate generation:
+   - FAISS-search the user index with user_vec -> top-k_neighbors
+     users (skipping self, cold, -1).
+   - Collect every anime those neighbors rated
+       rating >= neighbor_rating_threshold (default 7.0)
+   - Subtract anime the target user has already seen.
+   - Optionally drop anime with num_ratings < min_num_ratings
+     (popularity / reliability filter).
+   -> candidate pool of usually a few thousand anime.
+
+2. Content ranking:
+   - Take the user's taste vector user_vec.
+   - score(a) = cosine(user_vec, anime_vec_a)
+              = user_vec . cb.vectors[a]   (both L2-normalized)
+   - Implemented as one matmul:
+       pool_vecs = cb.vectors[pool_idxs]    (|pool| x 20000)
+       scores    = pool_vecs @ user_vec.T
+   - Sort, take top-N.
+
+WHY THIS DESIGN
+---------------
+Neighbors decide *what to consider*; content decides *how to rank*.
+Using neighbors only for filtering (not weighting) avoids the
+popularity collapse you get when you average neighbor ratings, and
+it sidesteps the expensive per-query groupby that the old hybrid
+needed.
+
+COLD START
+----------
+If u_idx == avg_idx (cold user):
+  - Skip CF entirely (no meaningful neighbors).
+  - Query cb.index directly with the avg taste vec.
+  - Return top-N (minus seen, optionally minus unpopular).
+This is essentially a popularity / mainstream-taste fallback.
+
+ARTIFACTS
+---------
+artifacts/recommender/hybrid/
+  (no persisted weights -- query-time only.
+   Reuses content + user indices and the ratings table.)
+
+
+================================================================
+ Evaluation
+================================================================
+
+Each of the three recommenders has a different input/output shape,
+so they're evaluated with different cheap, interpretable metrics --
+not a single shared one.
+
+Output layout:
+  artifacts/evaluation/
+    content_based/metrics.json
+    user_based/metrics.json
+    hybrid/metrics.json
+    summary.json   (all three + config used)
+
+----------------------------------------------------------------
+ Content eval -- "do similar anime actually look similar?"
+   Metric: genre_overlap@K
+----------------------------------------------------------------
+For each of N sampled anime (default 500):
+  1. Run content.recommend(seed, k=top_k).
+  2. For each returned anime, check if its genre set intersects
+     the seed's genre set.
+  3. overlap[seed] = (#recs sharing >=1 genre) / k.
+Final metric = mean overlap across sampled seeds.
+
+Sanity threshold: should be > 0.9 if content sim is working.
+A low value means TF-IDF is matching on tokens that don't carry
+genre signal (e.g. boilerplate synopsis text), which is a red flag.
+
+----------------------------------------------------------------
+ UserBased eval -- "do similar users actually share taste?"
+   Metric: mean_jaccard
+----------------------------------------------------------------
+For each of N sampled WARM users (default 200):
+  1. nbrs = ub.similar_users(uid, k=user_k_neighbors).
+  2. For each neighbor n:
+       j = |anime(uid) intersect anime(n)|
+           / |anime(uid) union anime(n)|
+  3. user_jaccard[uid] = mean of j over neighbors.
+Final metric = mean user_jaccard across sampled users.
+
+Interpretation: if your neighbors' watch lists overlap ~30%+ with
+yours, the user index is grouping people by genuine taste, not
+noise. If it's near random-pair Jaccard, the index isn't useful.
+
+----------------------------------------------------------------
+ Hybrid eval -- "do recommendations actually contain items the
+                 user would rate highly?"
+   Metric: hit@K
+----------------------------------------------------------------
+Per-user random holdout, in memory:
+
+For each of N sampled users with enough history
+(min_user_ratings, default 20):
+  1. Holdout split: hide holdout_ratio (20%) of their ratings.
+       held-in   -> used to rebuild user_vec
+       held-out  -> ground truth
+  2. Define relevant set: held-out items rated
+       >= relevant_threshold (default 7.0).
+     If empty, skip this user.
+  3. Rebuild user_vec from held-in only (so the recommender doesn't
+     "see the answer"):
+       mean_r   = held_in.rating.mean()
+       centered = held_in.rating - mean_r
+       row      = sparse row of centered values at held-in anime
+                  indices
+       user_vec = row @ tfidf_matrix; L2-normalize
+  4. Run the hybrid scoring with seen = held-in anime IDs.
+  5. hit = 1 if ANY anime in top-K is in the relevant set, else 0.
+
+Final metric = mean(hit) across users who had at least one
+relevant item in their holdout.
+
+Why Hit@K (and not precision/recall/NDCG):
+  - Most product-meaningful single number: did we help at all?
+  - Lower variance than precision/recall at small K.
+  - One number per user; easy to debug.
+
+Subtle leak worth knowing about:
+The evaluated user is still in the trained user index (built from
+ALL their ratings). The code filters out self_idx in the neighbor
+search, so the user's own full-history vector cannot be picked as
+its own neighbor. No leak in practice.
+
+

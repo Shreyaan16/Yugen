@@ -203,9 +203,8 @@ class UserBasedRecommender:
         return self.save()
 
     def load(self) -> "UserBasedRecommender":
-        """Load index + user_id_to_idx from disk. user_vectors_sparse is NOT restored
-        (would require retraining); methods that need it (similar_users) won't work
-        after load — use index.reconstruct() instead."""
+        """Load index + user_id_to_idx from disk. user_vectors_sparse is not
+        restored — lookups go through get_user_vec which uses index.reconstruct."""
         out_dir = self.config.user_based_dir
         self.index = faiss.read_index(os.path.join(out_dir, USER_INDEX_FILE))
         with open(os.path.join(out_dir, USER_ID_TO_IDX_FILE), "r", encoding="utf-8") as f:
@@ -219,6 +218,14 @@ class UserBasedRecommender:
         }
         return self
 
+    def get_user_vec(self, u_idx: int) -> np.ndarray:
+        """Return a (1, dim) float32 vector for index position u_idx.
+        Uses the cached sparse matrix when available (post-training), else
+        falls back to FAISS reconstruct (post-load)."""
+        if self.user_vectors_sparse is not None:
+            return self.user_vectors_sparse[u_idx].toarray().astype(np.float32)
+        return self.index.reconstruct(int(u_idx)).reshape(1, -1).astype(np.float32)
+
     def similar_users(self, user_id: int, k: int = 10) -> pd.DataFrame:
         u_idx = self.user_id_to_idx.get(int(user_id))
         if u_idx is None:
@@ -226,7 +233,7 @@ class UserBasedRecommender:
         if u_idx == self.avg_idx:
             raise ValueError(f"user_id {user_id} is cold; no neighbors available")
 
-        query = self.user_vectors_sparse[u_idx].toarray().astype(np.float32)
+        query = self.get_user_vec(u_idx)
         sims, nbrs = self.index.search(query, k + 5)
         rows = []
         for s, ni in zip(sims[0], nbrs[0]):
@@ -293,11 +300,7 @@ class HybridRecommender:
             raise ValueError(f"user_id {user_id} not found")
 
         is_cold = u_idx == ub.avg_idx
-        user_vec = (
-            ub.user_vectors_sparse[u_idx].toarray().astype(np.float32)
-            if not is_cold
-            else ub.index.reconstruct(ub.avg_idx).reshape(1, -1)
-        )
+        user_vec = ub.get_user_vec(ub.avg_idx if is_cold else u_idx)
 
         uar = self.user_anime_ratings_df
         seen = set(uar.loc[uar["user_id"] == user_id, "anime_id"].tolist())

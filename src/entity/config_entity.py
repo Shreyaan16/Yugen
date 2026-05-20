@@ -66,12 +66,25 @@ class HybridRecommenderConfig:
     min_num_ratings: int = _hy["min_num_ratings"]
 
 
+_eval_dir = os.path.join(training_pipeline_config.artifact_dir, EVALUATION_DIR_NAME)
+
+
 @dataclass
 class EvaluationConfig:
-    evaluation_dir: str = os.path.join(training_pipeline_config.artifact_dir, EVALUATION_DIR_NAME)
+    evaluation_dir: str = _eval_dir
+    content_eval_dir: str = os.path.join(_eval_dir, EVAL_CONTENT_DIR_NAME)
+    user_eval_dir: str = os.path.join(_eval_dir, EVAL_USER_DIR_NAME)
+    hybrid_eval_dir: str = os.path.join(_eval_dir, EVAL_HYBRID_DIR_NAME)
+
     top_k: int = _ev["top_k"]
-    holdout_ratio: float = _ev["holdout_ratio"]
-    relevant_threshold: float = _ev["relevant_threshold"]
-    n_users_sample: int = _ev["n_users_sample"]
-    min_user_ratings: int = _ev["min_user_ratings"]
     random_state: int = _ev["random_state"]
+
+    content_sample_anime: int = _ev["content"]["sample_anime"]
+
+    user_sample_users: int = _ev["user_based"]["sample_users"]
+    user_k_neighbors: int = _ev["user_based"]["k_neighbors"]
+
+    hybrid_holdout_ratio: float = _ev["hybrid"]["holdout_ratio"]
+    hybrid_relevant_threshold: float = _ev["hybrid"]["relevant_threshold"]
+    hybrid_n_users_sample: int = _ev["hybrid"]["n_users_sample"]
+    hybrid_min_user_ratings: int = _ev["hybrid"]["min_user_ratings"]

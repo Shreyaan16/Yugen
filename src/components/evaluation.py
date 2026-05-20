@@ -7,14 +7,18 @@ from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 
 from src.constants import (
-    EVAL_HYBRID_METRICS_FILE,
+    EVAL_METRICS_FILE,
     EVAL_SUMMARY_FILE,
     PARAMS_PATH,
     EXPT_NAME,
 )
-from src.entity.config_entity import (EvaluationConfig, HybridRecommenderConfig,)
+from src.entity.config_entity import EvaluationConfig, HybridRecommenderConfig
 from src.entity.artifact_entity import EvaluationArtifact
-from src.components.recommender import (ContentBasedRecommender, UserBasedRecommender, HybridRecommender)
+from src.components.recommender import (
+    ContentBasedRecommender,
+    UserBasedRecommender,
+    HybridRecommender,
+)
 from src.utils import read_yaml
 
 
@@ -22,6 +26,9 @@ class Evaluation:
     def __init__(self, config: EvaluationConfig | None = None):
         self.config = config or EvaluationConfig()
         os.makedirs(self.config.evaluation_dir, exist_ok=True)
+        os.makedirs(self.config.content_eval_dir, exist_ok=True)
+        os.makedirs(self.config.user_eval_dir, exist_ok=True)
+        os.makedirs(self.config.hybrid_eval_dir, exist_ok=True)
 
         self.content: ContentBasedRecommender | None = None
         self.user_based: UserBasedRecommender | None = None
@@ -33,8 +40,8 @@ class Evaluation:
         self._hy_cfg = HybridRecommenderConfig()
 
     def fit(self, content: ContentBasedRecommender, user_based: UserBasedRecommender,
-        hybrid: HybridRecommender, anime_df: pd.DataFrame, user_anime_ratings_df: pd.DataFrame,
-        ratings_df: pd.DataFrame,) -> "Evaluation":
+            hybrid: HybridRecommender, anime_df: pd.DataFrame,
+            user_anime_ratings_df: pd.DataFrame, ratings_df: pd.DataFrame) -> "Evaluation":
         self.content = content
         self.user_based = user_based
         self.hybrid = hybrid
@@ -43,8 +50,100 @@ class Evaluation:
         self.ratings_df = ratings_df
         return self
 
+    # ------------------------------------------------------------------
+    # Content-based: genre overlap @ K
+    # For each sampled anime, recommend top-K and check the fraction of recs
+    # sharing >=1 genre with the seed. Sanity check that content sim is sane.
+    # ------------------------------------------------------------------
+    def evaluate_content(self) -> dict:
+        cfg = self.config
+        cb = self.content
+        anime_df = self.anime_df
+
+        rng = np.random.default_rng(cfg.random_state)
+        eligible = anime_df[anime_df["genres"].apply(lambda g: isinstance(g, list) and len(g) > 0)]
+        n = min(cfg.content_sample_anime, len(eligible))
+        sample = eligible.sample(n=n, random_state=cfg.random_state)
+
+        genres_by_aid = dict(zip(anime_df["anime_id"], anime_df["genres"]))
+
+        per_anime_overlap = []
+        for aid in sample["anime_id"]:
+            try:
+                recs = cb.recommend(int(aid), k=cfg.top_k)
+            except ValueError:
+                continue
+            seed_genres = set(genres_by_aid.get(int(aid), []) or [])
+            if not seed_genres or len(recs) == 0:
+                continue
+            hits = 0
+            for rec_aid in recs["anime_id"]:
+                rec_genres = set(genres_by_aid.get(int(rec_aid), []) or [])
+                if seed_genres & rec_genres:
+                    hits += 1
+            per_anime_overlap.append(hits / len(recs))
+
+        return {
+            "anime_evaluated": len(per_anime_overlap),
+            "top_k": cfg.top_k,
+            f"genre_overlap@{cfg.top_k}": float(np.mean(per_anime_overlap)) if per_anime_overlap else 0.0,
+        }
+
+    # ------------------------------------------------------------------
+    # UserBased: Jaccard overlap of watched anime
+    # For each sampled user, look at top-K neighbors. Jaccard(target_anime,
+    # neighbor_anime) measures whether neighbors actually share taste.
+    # ------------------------------------------------------------------
+    def evaluate_user_based(self) -> dict:
+        cfg = self.config
+        ub = self.user_based
+        uar = self.user_anime_ratings_df
+
+        anime_by_user = uar.groupby("user_id")["anime_id"].agg(set).to_dict()
+        warm_users = [uid for uid, idx in ub.user_id_to_idx.items() if idx != ub.avg_idx]
+        if not warm_users:
+            return {"users_evaluated": 0, "k_neighbors": cfg.user_k_neighbors, "mean_jaccard": 0.0}
+
+        rng = np.random.default_rng(cfg.random_state)
+        n = min(cfg.user_sample_users, len(warm_users))
+        sampled = rng.choice(warm_users, size=n, replace=False)
+
+        per_user_jaccard = []
+        for uid in sampled:
+            target_set = anime_by_user.get(int(uid), set())
+            if not target_set:
+                continue
+            try:
+                nbrs = ub.similar_users(int(uid), k=cfg.user_k_neighbors)
+            except ValueError:
+                continue
+            if len(nbrs) == 0:
+                continue
+            neighbor_jaccards = []
+            for nid in nbrs["user_id"]:
+                nbr_set = anime_by_user.get(int(nid), set())
+                if not nbr_set:
+                    continue
+                union = target_set | nbr_set
+                if not union:
+                    continue
+                neighbor_jaccards.append(len(target_set & nbr_set) / len(union))
+            if neighbor_jaccards:
+                per_user_jaccard.append(float(np.mean(neighbor_jaccards)))
+
+        return {
+            "users_evaluated": len(per_user_jaccard),
+            "k_neighbors": cfg.user_k_neighbors,
+            "mean_jaccard": float(np.mean(per_user_jaccard)) if per_user_jaccard else 0.0,
+        }
+
+    # ------------------------------------------------------------------
+    # Hybrid: Hit@K via per-user random holdout
+    # Hide 20% of each user's ratings; check whether any high-rated holdout
+    # item appears in the recommender's top-K. Hit@K = fraction of users
+    # with at least one such hit.
+    # ------------------------------------------------------------------
     def _build_user_vec(self, train_ratings: pd.DataFrame) -> np.ndarray | None:
-        """Rebuild a user's TF-IDF-weighted vector from a subset of their ratings."""
         anime_id_to_idx = self.content.anime_id_to_idx
         tfidf_matrix = self.content.tfidf_matrix
 
@@ -66,7 +165,6 @@ class Evaluation:
         return user_vec_sparse.toarray().astype(np.float32)
 
     def _hybrid_top_k(self, user_id: int, user_vec: np.ndarray, seen: set, k: int) -> list[int]:
-        """New hybrid: CF neighbors define candidate pool, content sim ranks it."""
         cb = self.content
         ub = self.user_based
         cfg = self._hy_cfg
@@ -110,32 +208,21 @@ class Evaluation:
         order = np.argsort(-scores)[:k]
         return [pool[i] for i in order]
 
-    @staticmethod
-    def _metrics(recs: list[int], relevant: set, k: int) -> dict:
-        top = recs[:k]
-        hits = [1 if aid in relevant else 0 for aid in top]
-        precision = sum(hits) / k if k > 0 else 0.0
-        recall = sum(hits) / len(relevant) if relevant else 0.0
-        dcg = sum(h / np.log2(i + 2) for i, h in enumerate(hits))
-        idcg = sum(1 / np.log2(i + 2) for i in range(min(len(relevant), k)))
-        ndcg = dcg / idcg if idcg > 0 else 0.0
-        return {"precision@k": precision, "recall@k": recall, "ndcg@k": ndcg}
-
-    def _evaluate_user(self, user_id: int, rng: np.random.Generator) -> dict | None:
+    def _hit_for_user(self, user_id: int, rng: np.random.Generator) -> int | None:
         cfg = self.config
         uar = self.user_anime_ratings_df
         user_rats = uar[uar["user_id"] == user_id]
-        if len(user_rats) < cfg.min_user_ratings:
+        if len(user_rats) < cfg.hybrid_min_user_ratings:
             return None
 
-        n_hold = max(1, int(round(len(user_rats) * cfg.holdout_ratio)))
+        n_hold = max(1, int(round(len(user_rats) * cfg.hybrid_holdout_ratio)))
         hold_pos = rng.choice(len(user_rats), size=n_hold, replace=False)
         mask = np.zeros(len(user_rats), dtype=bool)
         mask[hold_pos] = True
         holdout = user_rats.iloc[mask]
         train = user_rats.iloc[~mask]
 
-        relevant = set(holdout.loc[holdout["rating"] >= cfg.relevant_threshold, "anime_id"].tolist())
+        relevant = set(holdout.loc[holdout["rating"] >= cfg.hybrid_relevant_threshold, "anime_id"])
         if not relevant:
             return None
 
@@ -144,25 +231,41 @@ class Evaluation:
             return None
 
         seen = set(train["anime_id"].tolist())
-        hybrid_recs = self._hybrid_top_k(user_id, user_vec, seen, cfg.top_k)
+        recs = self._hybrid_top_k(int(user_id), user_vec, seen, cfg.top_k)
+        return int(any(aid in relevant for aid in recs))
+
+    def evaluate_hybrid(self) -> dict:
+        cfg = self.config
+        uar = self.user_anime_ratings_df
+        rng = np.random.default_rng(cfg.random_state)
+
+        counts = uar.groupby("user_id").size()
+        eligible = counts[counts >= cfg.hybrid_min_user_ratings].index.to_numpy()
+        if len(eligible) == 0:
+            return {"users_evaluated": 0, "top_k": cfg.top_k, f"hit@{cfg.top_k}": 0.0}
+
+        n = min(cfg.hybrid_n_users_sample, len(eligible))
+        sampled = rng.choice(eligible, size=n, replace=False)
+
+        hits, total = 0, 0
+        for i, uid in enumerate(sampled, 1):
+            res = self._hit_for_user(int(uid), rng)
+            if res is None:
+                continue
+            hits += res
+            total += 1
+            if i % 50 == 0:
+                print(f"  hybrid eval {i}/{n} (kept {total}, hits {hits})")
 
         return {
-            "user_id": int(user_id),
-            "n_relevant": len(relevant),
-            "hybrid": self._metrics(hybrid_recs, relevant, cfg.top_k),
+            "users_evaluated": total,
+            "top_k": cfg.top_k,
+            f"hit@{cfg.top_k}": (hits / total) if total else 0.0,
         }
 
-    def _aggregate(self, per_user: list[dict], key: str) -> dict:
-        if not per_user:
-            return {"users_evaluated": 0, "precision@k": 0.0, "recall@k": 0.0, "ndcg@k": 0.0}
-        df = pd.DataFrame([r[key] for r in per_user])
-        return {
-            "users_evaluated": len(per_user),
-            "precision@k": float(df["precision@k"].mean()),
-            "recall@k": float(df["recall@k"].mean()),
-            "ndcg@k": float(df["ndcg@k"].mean()),
-        }
-
+    # ------------------------------------------------------------------
+    # MLflow logging
+    # ------------------------------------------------------------------
     @staticmethod
     def _flatten_params(params: dict, prefix: str = "") -> dict:
         flat = {}
@@ -176,67 +279,73 @@ class Evaluation:
                 flat[full_key] = value
         return flat
 
-    def _log_mlflow(self, params: dict, hybrid_metrics: dict) -> None:
+    def _log_mlflow(self, params: dict, content_m: dict, user_m: dict, hybrid_m: dict) -> None:
         mlflow.set_experiment(EXPT_NAME)
-
         flat_params = self._flatten_params(params)
         with mlflow.start_run(run_name="evaluation"):
             for key, value in flat_params.items():
                 mlflow.log_param(key, value)
+            for prefix, metrics in [("content", content_m), ("user", user_m), ("hybrid", hybrid_m)]:
+                for key, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        mlflow.log_metric(f"{prefix}_{key.replace('@', '_at_')}", value)
 
-            for key, value in hybrid_metrics.items():
-                mlflow.log_metric(f"hybrid_{key.replace('@', '_at_')}", value)
-
+    # ------------------------------------------------------------------
+    # Entry point
+    # ------------------------------------------------------------------
     def run(self) -> EvaluationArtifact:
         cfg = self.config
-        rng = np.random.default_rng(cfg.random_state)
 
-        uar = self.user_anime_ratings_df
-        counts = uar.groupby("user_id").size()
-        eligible = counts[counts >= cfg.min_user_ratings].index.to_numpy()
-        if len(eligible) == 0:
-            raise ValueError("no users meet min_user_ratings threshold")
+        print("Evaluating content-based ...")
+        content_m = self.evaluate_content()
+        print(f"  {content_m}")
 
-        n_sample = min(cfg.n_users_sample, len(eligible))
-        sampled = rng.choice(eligible, size=n_sample, replace=False)
+        print("Evaluating user-based ...")
+        user_m = self.evaluate_user_based()
+        print(f"  {user_m}")
 
-        per_user: list[dict] = []
-        for i, uid in enumerate(sampled, 1):
-            result = self._evaluate_user(int(uid), rng)
-            if result is not None:
-                per_user.append(result)
-            if i % 50 == 0:
-                print(f"  evaluated {i}/{n_sample} (kept {len(per_user)})")
+        print("Evaluating hybrid ...")
+        hybrid_m = self.evaluate_hybrid()
+        print(f"  {hybrid_m}")
 
-        hybrid_metrics = self._aggregate(per_user, "hybrid")
+        content_path = os.path.join(cfg.content_eval_dir, EVAL_METRICS_FILE)
+        user_path = os.path.join(cfg.user_eval_dir, EVAL_METRICS_FILE)
+        hybrid_path = os.path.join(cfg.hybrid_eval_dir, EVAL_METRICS_FILE)
+        summary_path = os.path.join(cfg.evaluation_dir, EVAL_SUMMARY_FILE)
+
+        with open(content_path, "w", encoding="utf-8") as f:
+            json.dump(content_m, f, indent=2)
+        with open(user_path, "w", encoding="utf-8") as f:
+            json.dump(user_m, f, indent=2)
+        with open(hybrid_path, "w", encoding="utf-8") as f:
+            json.dump(hybrid_m, f, indent=2)
+
         summary = {
             "config": {
                 "top_k": cfg.top_k,
-                "holdout_ratio": cfg.holdout_ratio,
-                "relevant_threshold": cfg.relevant_threshold,
-                "n_users_sample": cfg.n_users_sample,
-                "min_user_ratings": cfg.min_user_ratings,
                 "random_state": cfg.random_state,
+                "content_sample_anime": cfg.content_sample_anime,
+                "user_sample_users": cfg.user_sample_users,
+                "user_k_neighbors": cfg.user_k_neighbors,
+                "hybrid_holdout_ratio": cfg.hybrid_holdout_ratio,
+                "hybrid_relevant_threshold": cfg.hybrid_relevant_threshold,
+                "hybrid_n_users_sample": cfg.hybrid_n_users_sample,
+                "hybrid_min_user_ratings": cfg.hybrid_min_user_ratings,
             },
-            "hybrid": hybrid_metrics,
+            "content": content_m,
+            "user_based": user_m,
+            "hybrid": hybrid_m,
         }
-
-        out_dir = cfg.evaluation_dir
-        hybrid_path = os.path.join(out_dir, EVAL_HYBRID_METRICS_FILE)
-        summary_path = os.path.join(out_dir, EVAL_SUMMARY_FILE)
-
-        with open(hybrid_path, "w", encoding="utf-8") as f:
-            json.dump(hybrid_metrics, f, indent=2)
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
-        print(f"\nHybrid  : {hybrid_metrics}")
-
         params = read_yaml(PARAMS_PATH) or {}
-        self._log_mlflow(params, hybrid_metrics)
+        self._log_mlflow(params, content_m, user_m, hybrid_m)
 
         return EvaluationArtifact(
-            evaluation_dir=out_dir,
+            evaluation_dir=cfg.evaluation_dir,
+            content_metrics_path=content_path,
+            user_metrics_path=user_path,
             hybrid_metrics_path=hybrid_path,
             summary_path=summary_path,
         )

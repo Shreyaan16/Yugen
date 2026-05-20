@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import os
-import numpy as np
 import pandas as pd
-from scipy.sparse import csr_matrix
 
 from src.components.recommender import (
     ContentBasedRecommender,
@@ -58,11 +56,8 @@ class InferencePipeline:
         self.content = ContentBasedRecommender(ContentBasedRecommenderConfig()).load(self.anime_df)
 
         self.user_based = UserBasedRecommender(UserBasedRecommenderConfig()).load()
-        # UserBasedRecommender.load() does not restore user_vectors_sparse; reconstruct
-        # from the FAISS index so CF/Hybrid `recommend` can index it.
-        n = self.user_based.index.ntotal
-        dense = self.user_based.index.reconstruct_n(0, n).astype(np.float32)
-        self.user_based.user_vectors_sparse = csr_matrix(dense)
+        # user_vectors_sparse is not restored; downstream lookups go through
+        # ub.get_user_vec, which falls back to index.reconstruct on demand.
 
         self.hybrid = HybridRecommender(HybridRecommenderConfig()).fit(
             self.content, self.user_based, self.anime_df, self.uar_df, self.ratings_df

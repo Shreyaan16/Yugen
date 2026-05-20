@@ -46,7 +46,11 @@ TFIDF_VECTORIZER_FILE: str = "tfidf_vectorizer.pkl"
 USER_INDEX_FILE: str = "users.index"
 USER_ID_TO_IDX_FILE: str = "user_id_to_idx.json"
 
-EVAL_HYBRID_METRICS_FILE: str = "hybrid_metrics.json"
+EVAL_CONTENT_DIR_NAME: str = "content_based"
+EVAL_USER_DIR_NAME: str = "user_based"
+EVAL_HYBRID_DIR_NAME: str = "hybrid"
+
+EVAL_METRICS_FILE: str = "metrics.json"
 EVAL_SUMMARY_FILE: str = "summary.json"
 
 ######################## MLFLOW CONSTANTS ######################

@@ -16,8 +16,14 @@ hybrid:
 
 evaluation:
   top_k: 10
-  holdout_ratio: 0.2
-  relevant_threshold: 7.0
-  n_users_sample: 100
-  min_user_ratings: 20
   random_state: 42
+  content:
+    sample_anime: 500
+  user_based:
+    sample_users: 200
+    k_neighbors: 10
+  hybrid:
+    holdout_ratio: 0.2
+    relevant_threshold: 7.0
+    n_users_sample: 200
+    min_user_ratings: 20
