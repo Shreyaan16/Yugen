@@ -1,20 +1,59 @@
 stages:
-  training:
-    cmd: python -c "from src import pipeline; pipeline.stage_training()"
+  data_ingestion:
+    cmd: python -c "from src.components.data_ingestion import DataIngestion; from src.entity.config_entity import DataIngestionConfig; DataIngestion(DataIngestionConfig()).run()"
     deps:
-      - src/pipeline/__init__.py
-      - src/pipeline/training_pipeline.py
-      - src/components/loading.py
       - src/components/data_ingestion.py
+      - src/entity/config_entity.py
+      - src/entity/artifact_entity.py
+      - src/constants/__init__.py
+    outs:
+      - artifacts/data_ingestion
+
+  data_preprocessing:
+    cmd: python -c "from src.components.data_preprocessing import DataPreprocessing; from src.entity.config_entity import DataPreprocessingConfig; DataPreprocessing(DataPreprocessingConfig()).run()"
+    deps:
+      - artifacts/data_ingestion
       - src/components/data_preprocessing.py
-      - src/components/recommender.py
-      - src/components/evaluation.py
-      - src/utils/__init__.py
+      - src/entity/config_entity.py
+      - src/entity/artifact_entity.py
       - src/config/cols_to_drop.yaml
       - src/config/feature_bins.yaml
+      - src/utils/__init__.py
+    outs:
+      - artifacts/data_preprocessing
+
+  recommender_training:
+    cmd: python -c "from src.pipeline.training_pipeline import TrainingPipeline; from src.entity.config_entity import DataPreprocessingConfig; cfg = DataPreprocessingConfig(); TrainingPipeline().run_recommenders(cfg.data_preprocessing_dir, cfg.raw_data_dir)"
+    deps:
+      - artifacts/data_ingestion
+      - artifacts/data_preprocessing
+      - src/components/recommender.py
+      - src/pipeline/training_pipeline.py
+      - src/entity/config_entity.py
+      - src/entity/artifact_entity.py
+      - src/utils/__init__.py
     params:
       - params.yaml:
           - content_based
           - user_based
           - hybrid
+    outs:
+      - artifacts/recommender
+
+  evaluation:
+    cmd: python -c "from src.pipeline.inference_pipeline import InferencePipeline; from src.components.evaluation import Evaluation; from src.entity.config_entity import EvaluationConfig; ip = InferencePipeline().load(); Evaluation(EvaluationConfig()).fit(ip.content, ip.user_based, ip.hybrid, ip.anime_df, ip.uar_df, ip.ratings_df).run()"
+    deps:
+      - artifacts/recommender
+      - artifacts/data_preprocessing
+      - artifacts/data_ingestion
+      - src/components/evaluation.py
+      - src/components/recommender.py
+      - src/pipeline/inference_pipeline.py
+      - src/entity/config_entity.py
+      - src/entity/artifact_entity.py
+      - src/utils/__init__.py
+    params:
+      - params.yaml:
           - evaluation
+    outs:
+      - artifacts/evaluation
