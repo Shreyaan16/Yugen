@@ -50,3 +50,6 @@ USER_ID_TO_IDX_FILE: str = "user_id_to_idx.json"
 EVAL_CF_METRICS_FILE: str = "cf_metrics.json"
 EVAL_HYBRID_METRICS_FILE: str = "hybrid_metrics.json"
 EVAL_SUMMARY_FILE: str = "summary.json"
+
+######################## MLFLOW CONSTANTS ######################
+EXPT_NAME: str = os.environ["MLFLOW_EXPT_NAME"]

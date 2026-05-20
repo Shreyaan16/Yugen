@@ -1,14 +1,22 @@
 import json
 import os
+import mlflow
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 
-from src.constants import (EVAL_CF_METRICS_FILE, EVAL_HYBRID_METRICS_FILE, EVAL_SUMMARY_FILE)
+from src.constants import (
+    EVAL_CF_METRICS_FILE,
+    EVAL_HYBRID_METRICS_FILE,
+    EVAL_SUMMARY_FILE,
+    PARAMS_PATH,
+    EXPT_NAME,
+)
 from src.entity.config_entity import (CFRecommenderConfig, EvaluationConfig, HybridRecommenderConfig,)
 from src.entity.artifact_entity import EvaluationArtifact
 from src.components.recommender import (ContentBasedRecommender, UserBasedRecommender, CFRecommender, HybridRecommender)
+from src.utils import read_yaml
 
 
 class Evaluation:
@@ -243,6 +251,33 @@ class Evaluation:
             "ndcg@k": float(df["ndcg@k"].mean()),
         }
 
+    @staticmethod
+    def _flatten_params(params: dict, prefix: str = "") -> dict:
+        flat = {}
+        for key, value in params.items():
+            full_key = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                flat.update(Evaluation._flatten_params(value, full_key))
+            elif isinstance(value, (list, tuple)):
+                flat[full_key] = ",".join(str(v) for v in value)
+            else:
+                flat[full_key] = value
+        return flat
+
+    def _log_mlflow(self, params: dict, cf_metrics: dict, hybrid_metrics: dict) -> None:
+        mlflow.set_experiment(EXPT_NAME)
+
+        flat_params = self._flatten_params(params)
+        with mlflow.start_run(run_name="evaluation"):
+            for key, value in flat_params.items():
+                mlflow.log_param(key, value)
+
+            for key, value in cf_metrics.items():
+                mlflow.log_metric(f"cf_{key.replace('@', '_at_')}", value)
+
+            for key, value in hybrid_metrics.items():
+                mlflow.log_metric(f"hybrid_{key.replace('@', '_at_')}", value)
+
     def run(self) -> EvaluationArtifact:
         cfg = self.config
         rng = np.random.default_rng(cfg.random_state)
@@ -293,6 +328,9 @@ class Evaluation:
 
         print(f"\nCF      : {cf_metrics}")
         print(f"Hybrid  : {hybrid_metrics}")
+
+        params = read_yaml(PARAMS_PATH) or {}
+        self._log_mlflow(params, cf_metrics, hybrid_metrics)
 
         return EvaluationArtifact(
             evaluation_dir=out_dir,
