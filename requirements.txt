@@ -31,4 +31,4 @@ scipy
 langchain 
 langgraph
 rapidfuzz
-google-genai
+langchain-google-genai
