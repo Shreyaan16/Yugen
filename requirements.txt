@@ -28,3 +28,7 @@ uvicorn
 matplotlib
 seaborn 
 scipy
+langchain 
+langgraph
+rapidfuzz
+google-genai
