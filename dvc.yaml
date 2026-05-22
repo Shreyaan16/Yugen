@@ -55,6 +55,18 @@ stages:
     params:
       - params.yaml:
           - evaluation
-          - chatbot
     outs:
       - artifacts/evaluation
+
+  chatbot:
+    cmd: python chatbots/demo.py
+    deps:
+      - chatbots
+      - artifacts/data_preprocessing/anime.csv
+      - artifacts/recommender/content_based/tfidf_vectorizer.pkl
+      - artifacts/recommender/content_based/anime.index
+      - artifacts/recommender/content_based/anime_id_to_idx.json
+      - src/config/feature_bins.yaml
+    params:
+      - params.yaml:
+          - chatbot
