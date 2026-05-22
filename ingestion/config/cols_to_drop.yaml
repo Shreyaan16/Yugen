@@ -1,0 +1,9 @@
+preprocessing:
+  anime_df:
+    - favorites
+    - watching
+    - completed
+  users_df:
+    - email
+    - username
+    - password
