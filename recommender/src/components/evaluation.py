@@ -6,20 +6,20 @@ import pandas as pd
 from scipy.sparse import csr_matrix
 from sklearn.preprocessing import normalize
 
-from src.constants import (
+from recommender.src.constants import (
     EVAL_METRICS_FILE,
     EVAL_SUMMARY_FILE,
     PARAMS_PATH,
     EXPT_NAME,
 )
-from src.entity.config_entity import EvaluationConfig, HybridRecommenderConfig
-from src.entity.artifact_entity import EvaluationArtifact
-from src.components.recommender import (
+from recommender.src.entity.config_entity import EvaluationConfig, HybridRecommenderConfig
+from recommender.src.entity.artifact_entity import EvaluationArtifact
+from recommender.src.components.recommender import (
     ContentBasedRecommender,
     UserBasedRecommender,
     HybridRecommender,
 )
-from src.utils import read_yaml
+from recommender.src.utils import read_yaml
 
 
 class Evaluation:

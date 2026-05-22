@@ -1,5 +1,5 @@
-from src.pipeline.training_pipeline import TrainingPipeline
-from src.pipeline.inference_pipeline import InferencePipeline
+from recommender.src.pipeline.training_pipeline import TrainingPipeline
+from recommender.src.pipeline.inference_pipeline import InferencePipeline
 
 
 def stage_training() -> None:

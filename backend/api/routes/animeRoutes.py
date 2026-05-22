@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from api.constants import ALL_ANIME_DEFAULT_LIMIT, ALL_ANIME_MAX_LIMIT, TOP_K_SIMILAR
-from api.controllers.animeControllers import (
+from backend.api.constants import ALL_ANIME_DEFAULT_LIMIT, ALL_ANIME_MAX_LIMIT, TOP_K_SIMILAR
+from backend.api.controllers.animeControllers import (
     get_anime_detail,
     get_current_user,
     get_similar_anime,
@@ -11,8 +11,8 @@ from api.controllers.animeControllers import (
     rate_anime,
     recommend_for_user,
 )
-from api.controllers.authControllers import get_db
-from api.models.authModels import RateSchema, User
+from backend.api.controllers.authControllers import get_db
+from backend.api.models.authModels import RateSchema, User
 
 router = APIRouter()
 

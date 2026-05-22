@@ -1,8 +1,8 @@
 import os
 from azure.storage.blob import BlobServiceClient
-from src.constants import CONNECTION_STRING, CONTAINER_NAME
-from src.entity.config_entity import DataIngestionConfig
-from src.entity.artifact_entity import DataIngestionArtifact
+from recommender.src.constants import CONNECTION_STRING, CONTAINER_NAME
+from recommender.src.entity.config_entity import DataIngestionConfig
+from recommender.src.entity.artifact_entity import DataIngestionArtifact
 
 class DataIngestion:
     def __init__(self, data_ingestion_config: DataIngestionConfig):

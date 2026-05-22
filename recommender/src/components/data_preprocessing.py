@@ -1,9 +1,9 @@
 import os
 import pandas as pd
-from src.constants import *
-from src.entity.config_entity import DataPreprocessingConfig
-from src.entity.artifact_entity import DataPreprocessingArtifact
-from src.utils import *
+from recommender.src.constants import *
+from recommender.src.entity.config_entity import DataPreprocessingConfig
+from recommender.src.entity.artifact_entity import DataPreprocessingArtifact
+from recommender.src.utils import *
 
 
 class DataPreprocessing:

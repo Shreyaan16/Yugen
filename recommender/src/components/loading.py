@@ -6,8 +6,8 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from src.entity.artifact_entity import LoadingArtifact
-from src.entity.config_entity import LoadingConfig
+from recommender.src.entity.artifact_entity import LoadingArtifact
+from recommender.src.entity.config_entity import LoadingConfig
 
 class Loading:
     def __init__(self, config: LoadingConfig):

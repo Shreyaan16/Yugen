@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from api.constants import *
+from backend.api.constants import *
 from jose import jwt
 import hashlib
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-from api.models.authModels import User, RegisterSchema, LoginSchema  # noqa: E402  (Base must exist first)
+from backend.api.models.authModels import User, RegisterSchema, LoginSchema  # noqa: E402  (Base must exist first)
 
 def get_db():
     db = SessionLocal()

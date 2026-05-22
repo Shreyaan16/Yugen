@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
-from src.constants import *
-from src.utils import read_yaml
+from recommender.src.constants import *
+from recommender.src.utils import read_yaml
 
 _params = read_yaml(PARAMS_PATH)
 _cb = _params["content_based"]

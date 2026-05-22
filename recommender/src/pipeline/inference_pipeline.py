@@ -3,18 +3,18 @@ from __future__ import annotations
 import os
 import pandas as pd
 
-from src.components.recommender import (
+from recommender.src.components.recommender import (
     ContentBasedRecommender,
     UserBasedRecommender,
     HybridRecommender,
 )
-from src.constants import (
+from recommender.src.constants import (
     ANIME_FILE_NAME,
     USERS_FILE_NAME,
     USER_ANIME_RATINGS_FILE_NAME,
     RATINGS_FILE_NAME,
 )
-from src.entity.config_entity import (
+from recommender.src.entity.config_entity import (
     DataPreprocessingConfig,
     ContentBasedRecommenderConfig,
     UserBasedRecommenderConfig,

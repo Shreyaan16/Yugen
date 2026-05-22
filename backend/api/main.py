@@ -5,12 +5,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from api.controllers.authControllers import Base, engine
-from api.models import authModels  # noqa: F401  (register tables on Base)
-from api.routes.animeRoutes import router as anime_router
-from api.routes.authRoutes import router as auth_router
-from src.components.recommender import ContentBasedRecommender, HybridRecommender
-from src.constants import (
+from backend.api.controllers.authControllers import Base, engine
+from backend.api.models import authModels  # noqa: F401  (register tables on Base)
+from backend.api.routes.animeRoutes import router as anime_router
+from backend.api.routes.authRoutes import router as auth_router
+from recommender.src.components.recommender import ContentBasedRecommender, HybridRecommender
+from recommender.src.constants import (
     ANIME_FILE_NAME,
     CONTENT_FAISS_TO_MAL_FILE,
     CONTENT_INDEX_FILE,
@@ -21,12 +21,12 @@ from src.constants import (
     USER_ID_TO_VECTOR_FILE,
     USER_INDEX_FILE,
 )
-from src.entity.artifact_entity import (
+from recommender.src.entity.artifact_entity import (
     ContentBasedRecommenderArtifact,
     HybridRecommenderArtifact,
     UserBasedRecommenderArtifact,
 )
-from src.entity.config_entity import (
+from recommender.src.entity.config_entity import (
     ContentBasedRecommenderConfig,
     DataPreprocessingConfig,
     HybridRecommenderConfig,

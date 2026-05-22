@@ -2,7 +2,7 @@ import os
 from typing import Optional
 import yaml
 import pandas as pd
-from src.constants import COLS_TO_DROP_CONFIG
+from recommender.src.constants import COLS_TO_DROP_CONFIG
 
 def read_yaml(file_path):
     try:

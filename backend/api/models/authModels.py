@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, SmallInteger, ForeignKey, DateTime, func
 from pydantic import BaseModel, EmailStr, conint
-from api.controllers.authControllers import Base
+from backend.api.controllers.authControllers import Base
 
 class User(Base):
     __tablename__ = "users"

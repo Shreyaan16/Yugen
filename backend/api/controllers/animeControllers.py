@@ -7,9 +7,9 @@ from jose import JWTError, jwt
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from api.constants import *
-from api.controllers.authControllers import get_db
-from api.models.authModels import RateSchema, User, UserRating
+from backend.api.constants import *
+from backend.api.controllers.authControllers import get_db
+from backend.api.models.authModels import RateSchema, User, UserRating
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=True)
 

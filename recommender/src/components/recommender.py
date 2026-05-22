@@ -7,9 +7,9 @@ import faiss
 from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
-from src.constants import (CONTENT_INDEX_FILE, ANIME_ID_TO_IDX_FILE, TFIDF_VECTORIZER_FILE, USER_INDEX_FILE, USER_ID_TO_IDX_FILE)
-from src.entity.config_entity import (ContentBasedRecommenderConfig, UserBasedRecommenderConfig, HybridRecommenderConfig)
-from src.entity.artifact_entity import (ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact, HybridRecommenderArtifact)
+from recommender.src.constants import (CONTENT_INDEX_FILE, ANIME_ID_TO_IDX_FILE, TFIDF_VECTORIZER_FILE, USER_INDEX_FILE, USER_ID_TO_IDX_FILE)
+from recommender.src.entity.config_entity import (ContentBasedRecommenderConfig, UserBasedRecommenderConfig, HybridRecommenderConfig)
+from recommender.src.entity.artifact_entity import (ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact, HybridRecommenderArtifact)
 
 
 def _join_list(x):
