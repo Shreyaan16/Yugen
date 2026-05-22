@@ -2,7 +2,6 @@ content_based:
   max_features: 20000
   ngram_range: [1, 2]
   min_df: 2
-  random_state: 42
 
 user_based:
   min_ratings: 0

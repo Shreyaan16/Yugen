@@ -2,7 +2,6 @@ pandas
 numpy
 scikit-learn
 faiss-cpu
-neo4j
 python-dotenv
 setuptools
 azure-identity
@@ -25,9 +24,6 @@ email-validator
 pydantic
 fastapi
 uvicorn
-matplotlib
-seaborn 
-scipy
 langchain 
 langgraph
 rapidfuzz

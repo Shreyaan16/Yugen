@@ -5,7 +5,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="YuGen",
-    version="0.1",
+    version="2.0",
     author="Shreyaan16",
     packages=find_packages(),
     install_requires = requirements,
