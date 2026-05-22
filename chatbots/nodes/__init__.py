@@ -1,4 +1,3 @@
-
 from langchain_core.messages import SystemMessage, trim_messages
 from langgraph.graph import MessagesState
 from chatbots.constants import MEMORY_CFG
@@ -37,8 +36,9 @@ def make_agent_node(llm_with_tools):
             token_counter=llm_with_tools,
             include_system=False,
         )
-        messages  = [SystemMessage(content=SYSTEM_PROMPT)] + trimmed
-        response  = llm_with_tools.invoke(messages)
+        response = llm_with_tools.invoke(
+            [SystemMessage(content=SYSTEM_PROMPT)] + trimmed
+        )
         return {"messages": [response]}
 
     return agent_node
