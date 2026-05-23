@@ -1,25 +1,13 @@
 import uuid
 from pathlib import Path
-
 import pandas as pd
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
-
-from chatbot.constants import (
-    GOOGLE_API_KEY, TAVILY_API_KEY,
-    MODEL, ARTIFACT_PATHS,
-    FUZZY_SEARCH_CFG, SIMILARITY_CFG, WEB_SEARCH_CFG,
-)
-from chatbot.tools import (
-    FuzzyFindAnimeTool,
-    GetAnimeInfoTool,
-    SearchAnimeWebTool,
-    FindSimilarAnimeTool,
-)
+from chatbot.constants import *
+from chatbot.tools import *
 from chatbot.nodes import make_agent_node
-
 
 class AnimeAgent:
     """
@@ -57,12 +45,7 @@ class AnimeAgent:
         )
 
         # Convert each class instance to a LangChain tool
-        lc_tools = [
-            _fuzzy.as_tool(),
-            _info.as_tool(),
-            _web.as_tool(),
-            _similar.as_tool(),
-        ]
+        lc_tools = [_fuzzy.as_tool(), _info.as_tool(), _web.as_tool(), _similar.as_tool()]
 
         # ── LLM ────────────────────────────────────────────────
         llm            = ChatGoogleGenerativeAI(model=MODEL, google_api_key=GOOGLE_API_KEY)
@@ -71,35 +54,28 @@ class AnimeAgent:
         # ── Graph ──────────────────────────────────────────────
         agent_node = make_agent_node(llm_with_tools)
         tool_node  = ToolNode(lc_tools)
-
         builder = StateGraph(MessagesState)
         builder.add_node("agent", agent_node)
         builder.add_node("tools", tool_node)
         builder.add_edge(START, "agent")
         builder.add_conditional_edges("agent", tools_condition)
         builder.add_edge("tools", "agent")
-
         self._memory = MemorySaver()
         self._graph  = builder.compile(checkpointer=self._memory)
 
     # ── Public API ─────────────────────────────────────────────
-
     def new_session(self, user_id: str) -> str:
         """Generate a fresh thread_id tied to user_id."""
         return f"{user_id}:{uuid.uuid4().hex[:8]}"
 
     def chat(self, message: str, thread_id: str) -> str:
         """Send a message and return the agent reply.
-
         Args:
             message:   User's input text.
             thread_id: Session identifier from new_session().
         """
         config = {"configurable": {"thread_id": thread_id}}
-        result = self._graph.invoke(
-            {"messages": [{"role": "user", "content": message}]},
-            config=config,
-        )
+        result = self._graph.invoke({"messages": [{"role": "user", "content": message}]}, config=config)
         return result["messages"][-1].content
 
     def clear_session(self, thread_id: str) -> None:
