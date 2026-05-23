@@ -7,4 +7,3 @@ __pycache__
 artifacts/
 mlruns/
 frontend/
-backend/
