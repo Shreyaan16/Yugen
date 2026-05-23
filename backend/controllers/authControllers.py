@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 import hashlib
 from datetime import datetime, timedelta
 
@@ -125,5 +126,6 @@ def login_user(user: LoginSchema, db: Session) -> dict:
     if not db_user or not verify_password(user.password, db_user.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_access_token(data={"sub": str(db_user.user_id)})
-    return {"access_token": token, "token_type": "bearer"}
+    token     = create_access_token(data={"sub": str(db_user.user_id)})
+    thread_id = f"{db_user.user_id}:{uuid.uuid4().hex[:8]}"  # fresh chatbot session per login
+    return {"access_token": token, "token_type": "bearer", "chatbot_session_id": thread_id}
