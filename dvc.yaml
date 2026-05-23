@@ -1,0 +1,74 @@
+stages:
+
+  # ── 1. Export PostgreSQL tables → Azure Blob Storage ──────────────────────
+  loading:
+    cmd: python -m ingestion.pipeline.loading_pipeline
+    deps:
+      - ingestion/components/loading.py
+      - ingestion/entity/config_entity.py
+    outs:
+      - artifacts/.loading_manifest.json
+
+  # ── 2. Download CSVs from Azure → local artifacts/data_ingestion/ ─────────
+  data_ingestion:
+    cmd: python -m ingestion.pipeline.ingestion_pipeline
+    deps:
+      - artifacts/.loading_manifest.json
+      - ingestion/components/data_ingestion.py
+      - ingestion/entity/config_entity.py
+    outs:
+      - artifacts/data_ingestion
+
+  # ── 3. Clean & aggregate → artifacts/data_preprocessing/ ─────────────────
+  data_preprocessing:
+    cmd: python -m ingestion.pipeline.preprocessing_pipeline
+    deps:
+      - artifacts/data_ingestion
+      - ingestion/components/data_preprocessing.py
+      - ingestion/config/cols_to_drop.yaml
+      - ingestion/config/feature_bins.yaml
+    outs:
+      - artifacts/data_preprocessing
+
+  # ── 4a. Train recommender models (content-based + user-based) ────────────
+  #        Runs in parallel with the chatbot stage.
+  recommender_train:
+    cmd: python -m recommender.pipeline.training_pipeline
+    deps:
+      - artifacts/data_preprocessing
+      - recommender/components/content_based.py
+      - recommender/components/user_based.py
+      - recommender/pipeline/training_pipeline.py
+      - params.yaml
+    params:
+      - content_based
+      - user_based
+    outs:
+      - artifacts/recommender
+
+  # ── 4b. Chatbot stage (parallel with recommender_train) ───────────────────
+  #        Depends only on preprocessing output; recommender artifacts are
+  #        assumed to exist from a prior run when chatbot is run standalone.
+  chatbot:
+    cmd: python -m chatbot.demo
+    deps:
+      - artifacts/data_preprocessing/anime.csv
+      - chatbot/
+      - ingestion/config/feature_bins.yaml
+      - params.yaml
+    params:
+      - chatbot
+
+  # ── 5. Evaluate all recommender models ───────────────────────────────────
+  recommender_eval:
+    cmd: python -m recommender.pipeline.evaluation_pipeline
+    deps:
+      - artifacts/data_preprocessing
+      - artifacts/recommender
+      - recommender/components/evaluation.py
+      - recommender/pipeline/evaluation_pipeline.py
+      - params.yaml
+    params:
+      - evaluation
+    outs:
+      - artifacts/evaluation
