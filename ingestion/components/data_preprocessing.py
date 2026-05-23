@@ -12,7 +12,7 @@ class DataPreprocessing:
         self.bins_cfg = read_yaml(FEATURE_BINS_CONFIG)
 
     def _load_tables(self) -> dict:
-        raw_dir = self.config.data_preprocessing_dir
+        raw_dir = self.config.data_ingestion_dir
         names = NAMES
         tables = {}
         for name in names:

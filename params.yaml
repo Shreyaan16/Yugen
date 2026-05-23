@@ -30,12 +30,7 @@ evaluation:
 chatbot:
   model: "gemini-2.5-flash"
   
-  artifact_paths:
-    anime_csv: "artifacts/data_preprocessing/anime.csv"
-    vectorizer: "artifacts/recommender/content_based/tfidf_vectorizer.pkl"
-    faiss_index: "artifacts/recommender/content_based/anime.index"
-    id_map: "artifacts/recommender/content_based/anime_id_to_idx.json"
-    feature_bins: "src/config/feature_bins.yaml"
+
   
   fuzzy_search:
     top_n: 5

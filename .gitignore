@@ -1,6 +1,7 @@
 data/
 faiss_artifacts/
 .env
+.claude
 __pycache__
 *.egg-info
 artifacts/
