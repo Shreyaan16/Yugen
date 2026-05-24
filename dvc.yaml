@@ -1,5 +1,4 @@
 stages:
-
   # ── 1. Export PostgreSQL tables → Azure Blob Storage ──────────────────────
   loading:
     cmd: python -m ingestion.pipeline.loading_pipeline
@@ -30,19 +29,17 @@ stages:
     outs:
       - artifacts/data_preprocessing
 
-  # ── 4a. Train recommender models (content-based + user-based) ────────────
+  # ── 4a. Train recommender models (content-based) ─────────────────────────
   #        Runs in parallel with the chatbot stage.
   recommender_train:
     cmd: python -m recommender.pipeline.training_pipeline
     deps:
       - artifacts/data_preprocessing
       - recommender/components/content_based.py
-      - recommender/components/user_based.py
       - recommender/pipeline/training_pipeline.py
       - params.yaml
     params:
       - content_based
-      - user_based
     outs:
       - artifacts/recommender
 

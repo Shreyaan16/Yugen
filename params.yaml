@@ -3,14 +3,8 @@ content_based:
   ngram_range: [1, 2]
   min_df: 2
 
-user_based:
-  min_ratings: 0
-  chunk_size: 5000
-
 hybrid:
-  k_neighbors: 50
   top_n: 10
-  neighbor_rating_threshold: 7.0
   min_num_ratings: 50
 
 evaluation:
@@ -18,19 +12,13 @@ evaluation:
   random_state: 42
   content:
     sample_anime: 500
-  user_based:
-    sample_users: 200
-    k_neighbors: 10
   hybrid:
-    holdout_ratio: 0.2
-    relevant_threshold: 7.0
-    n_users_sample: 200
+    liked_threshold: 7.0
+    n_users_sample: 20
     min_user_ratings: 20
 
 chatbot:
   model: "gemini-2.5-flash"
-  
-
   
   fuzzy_search:
     top_n: 5
@@ -39,7 +27,7 @@ chatbot:
   
   similarity_search:
     k: 10
-  
+
   web_search:
     max_results: 5
     search_depth: "basic"

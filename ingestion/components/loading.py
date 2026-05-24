@@ -93,7 +93,11 @@ class Loading:
         return uploaded
 
     def run(self) -> LoadingArtifact:
-        uploaded = self.export_all_tables()
+        self.connect()
+        try:
+            uploaded = self.export_all_tables()
+        finally:
+            self.disconnect()
         return LoadingArtifact(uploaded_blobs=uploaded)
 
 

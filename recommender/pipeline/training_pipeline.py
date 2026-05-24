@@ -2,15 +2,13 @@ import os
 import pandas as pd
 from recommender.constants import *
 from recommender.components.content_based import ContentBasedRecommender
-from recommender.components.user_based import UserBasedRecommender
-from recommender.entity.artifact_entity import (ContentBasedRecommenderArtifact, UserBasedRecommenderArtifact)
-from recommender.entity.config_entity import (ContentBasedRecommenderConfig, UserBasedRecommenderConfig)
+from recommender.entity.artifact_entity import ContentBasedRecommenderArtifact
+from recommender.entity.config_entity import ContentBasedRecommenderConfig
 
 
 class TrainingPipeline:
-    def __init__(self, cb_config: ContentBasedRecommenderConfig | None = None, ub_config: UserBasedRecommenderConfig | None = None):
+    def __init__(self, cb_config: ContentBasedRecommenderConfig | None = None):
         self.cb_config = cb_config or ContentBasedRecommenderConfig()
-        self.ub_config = ub_config or UserBasedRecommenderConfig()
         self._preprocessed_dir = self.cb_config.preprocessed_dir
 
     def _load_data(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -35,20 +33,11 @@ class TrainingPipeline:
         print(f"   TF-IDF matrix       → {artifact.tfidf_matrix_path}")
         return cb, artifact
 
-    def _run_user_based(self, ratings_df: pd.DataFrame, users_df: pd.DataFrame,) -> tuple[UserBasedRecommender, UserBasedRecommenderArtifact]:
-        print("\n[TrainingPipeline] Stage 2 — User-Based Recommender")
-        ub = UserBasedRecommender(config=self.ub_config)
-        artifact = ub.run(ratings_df, users_df)
-        print(f"   User FAISS index    → {artifact.index_path}")
-        print(f"   user_id→idx map     → {artifact.user_id_to_idx_path}")
-        return ub, artifact
-
     def run(self) -> dict:
         anime_df, users_df, ratings_df = self._load_data()
         cb, cb_artifact = self._run_content_based(anime_df)
-        ub, ub_artifact = self._run_user_based(ratings_df, users_df)
         print("\n[TrainingPipeline]   Training complete.\n")
-        return {"content_based": cb_artifact, "user_based": ub_artifact}
+        return {"content_based": cb_artifact}
 
 if __name__ == "__main__":
     TrainingPipeline().run()

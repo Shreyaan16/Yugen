@@ -62,6 +62,12 @@ class ContentBasedRecommender:
         tfidf_matrix_path = os.path.join(out_dir, TFIDF_MATRIX_FILE)
         if os.path.exists(tfidf_matrix_path):
             self.tfidf_matrix = scipy.sparse.load_npz(tfidf_matrix_path)
+        # Reconstruct all vectors into a dense numpy array in one C call so the
+        # hybrid recommender can do batch dot-products instead of a Python loop
+        # of individual index.reconstruct() calls.
+        n, d = self.index.ntotal, self.index.d
+        self.vectors = np.empty((n, d), dtype=np.float32)
+        self.index.reconstruct_n(0, n, self.vectors)
 
     def fit(self, anime_df: pd.DataFrame) -> "ContentBasedRecommender":
         df = anime_df.reset_index(drop=True).copy()
@@ -92,7 +98,6 @@ class ContentBasedRecommender:
         with open(tfidf_path, "wb") as f:
             pickle.dump(self.vectorizer, f)
         scipy.sparse.save_npz(tfidf_matrix_path, self.tfidf_matrix)
-        self.anime_df.to_csv(os.path.join(out_dir, ANIME_FILE_NAME), index=False)
         return ContentBasedRecommenderArtifact(
             content_based_dir=out_dir,
             index_path=index_path,
