@@ -68,6 +68,22 @@ class AnimeAgent:
         """Generate a fresh thread_id tied to user_id."""
         return f"{user_id}:{uuid.uuid4().hex[:8]}"
 
+    @staticmethod
+    def _extract_text(content) -> str:
+        """Normalise LangChain message content to a plain string.
+        Content can be a str or a list of content-block dicts
+        (e.g. [{"type": "text", "text": "..."}]) depending on the model/version.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        return str(content)
+
     def chat(self, message: str, thread_id: str) -> str:
         """Send a message and return the agent reply.
         Args:
@@ -76,7 +92,7 @@ class AnimeAgent:
         """
         config = {"configurable": {"thread_id": thread_id}}
         result = self._graph.invoke({"messages": [{"role": "user", "content": message}]}, config=config)
-        return result["messages"][-1].content
+        return self._extract_text(result["messages"][-1].content)
 
     def clear_session(self, thread_id: str) -> None:
         """Wipe all memory for a given session."""
@@ -93,6 +109,6 @@ class AnimeAgent:
         config = {"configurable": {"thread_id": thread_id}}
         state  = self._graph.get_state(config)
         return [
-            {"role": m.type, "content": m.content}
+            {"role": m.type, "content": self._extract_text(m.content)}
             for m in state.values.get("messages", [])
         ]

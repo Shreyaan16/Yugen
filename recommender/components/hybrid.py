@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 import numpy as np
 import pandas as pd
-from recommender.constants import PARAMS_PATH
+from recommender.constants import *
 from recommender.entity.config_entity import (HybridRecommenderConfig, ContentBasedRecommenderConfig)
 from recommender.entity.artifact_entity import HybridRecommenderArtifact
 from recommender.components.content_based import ContentBasedRecommender
