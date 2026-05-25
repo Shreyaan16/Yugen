@@ -9,6 +9,7 @@ from jose import jwt, JWTError
 from backend.services import token_blacklist
 from backend.constants import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, TOP_K
 from backend.services.store import store
+from backend.services import chat_history
 from backend.models.authModels import User, RegisterSchema, LoginSchema
 
 def hash_password(password: str) -> str:
@@ -85,6 +86,7 @@ def logout_user(credentials: HTTPAuthorizationCredentials, thread_id: str | None
         try:
             if store.agent:
                 store.agent.clear_session(thread_id)
+            chat_history.clear_history(thread_id)
         except Exception:
             pass  # non-fatal
     return {"message": "Logged out successfully"}

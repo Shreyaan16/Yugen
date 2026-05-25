@@ -1,20 +1,24 @@
 import uuid
+import logging
 from pathlib import Path
 import pandas as pd
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.redis import RedisSaver
 from chatbot.constants import *
 from chatbot.tools import *
 from chatbot.nodes import make_agent_node
+
+log = logging.getLogger(__name__)
 
 class AnimeAgent:
     """
     Session-based anime chatbot.
 
     Each conversation lives under a unique thread_id.
-    Memory is in-process (MemorySaver) — resets when the process restarts.
+    Memory is stored in Redis (fallback to in-process if Redis is unavailable).
 
     Usage
     -----
@@ -60,8 +64,21 @@ class AnimeAgent:
         builder.add_edge(START, "agent")
         builder.add_conditional_edges("agent", tools_condition)
         builder.add_edge("tools", "agent")
-        self._memory = MemorySaver()
+        self._memory = self._build_checkpointer()
         self._graph  = builder.compile(checkpointer=self._memory)
+
+    def _build_checkpointer(self):
+        if RedisSaver is None:
+            return MemorySaver()
+        host = REDIS_HOST
+        port = REDIS_PORT
+        db = REDIS_DB
+        url = f"redis://{host}:{port}/{db}"
+        try:
+            return RedisSaver.from_conn_string(url)
+        except Exception as exc:
+            log.warning("Redis checkpointer init failed, using MemorySaver: %s", exc)
+            return MemorySaver()
 
     # ── Public API ─────────────────────────────────────────────
     def new_session(self, user_id: str) -> str:
@@ -96,9 +113,23 @@ class AnimeAgent:
 
     def clear_session(self, thread_id: str) -> None:
         """Wipe all memory for a given session."""
-        keys = [k for k in self._memory.storage if thread_id in str(k)]
-        for k in keys:
-            del self._memory.storage[k]
+        config = {"configurable": {"thread_id": thread_id}}
+        if hasattr(self._memory, "delete"):
+            try:
+                self._memory.delete(config)
+                return
+            except Exception:
+                pass
+        if hasattr(self._memory, "clear"):
+            try:
+                self._memory.clear(config)
+                return
+            except Exception:
+                pass
+        if hasattr(self._memory, "storage"):
+            keys = [k for k in self._memory.storage if thread_id in str(k)]
+            for k in keys:
+                del self._memory.storage[k]
 
     def get_history(self, thread_id: str) -> list[dict]:
         """Return message history for a session (useful for debugging).

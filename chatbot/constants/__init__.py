@@ -27,3 +27,7 @@ ID_MAP       = str(_ARTIFACT_DIR / "recommender" / "content_based" / "anime_id_t
 FEATURE_BINS = str(_PROJECT_ROOT / "ingestion" / "config" / "feature_bins.yaml")
 
 ARTIFACT_PATHS = {"anime_csv": ANIME_CSV,  "vectorizer": VECTORIZER, "faiss_index": FAISS_INDEX, "id_map": ID_MAP, "feature_bins": FEATURE_BINS}
+
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+REDIS_DB = int(os.getenv("REDIS_DB"))

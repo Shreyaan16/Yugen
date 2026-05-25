@@ -26,6 +26,7 @@ fastapi
 uvicorn
 langchain 
 langgraph
+langgraph-checkpoint-redis
 rapidfuzz
 langchain-google-genai
 redis

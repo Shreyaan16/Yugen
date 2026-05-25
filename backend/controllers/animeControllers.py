@@ -3,6 +3,7 @@ import logging
 from fastapi import HTTPException
 from backend.constants import ALL_ANIME_DEFAULT_LIMIT, ALL_ANIME_MAX_LIMIT, TOP_K_SIMILAR
 from backend.services.store import store
+from backend.services import chat_history
 from backend.utils import to_card, clean
 
 log = logging.getLogger(__name__)
@@ -65,10 +66,13 @@ def chat(message: str, thread_id: str | None, user_id: int | None) -> dict:
         label = str(user_id) if user_id else "anon"
         thread_id = store.agent.new_session(label)
     reply = store.agent.chat(message, thread_id=thread_id)
+    chat_history.append_message(thread_id, "human", message)
+    chat_history.append_message(thread_id, "ai", reply)
     return {"reply": reply, "thread_id": thread_id}
 
 
 def get_chat_history(thread_id: str) -> list[dict]:
     if store.agent is None:
         raise HTTPException(status_code=503, detail="Chatbot unavailable: recommender artifacts not yet trained")
-    return store.agent.get_history(thread_id)
+    history = chat_history.get_history(thread_id)
+    return history if history else store.agent.get_history(thread_id)
