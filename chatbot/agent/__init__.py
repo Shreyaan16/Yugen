@@ -70,12 +70,18 @@ class AnimeAgent:
     def _build_checkpointer(self):
         if RedisSaver is None:
             return MemorySaver()
-        host = REDIS_HOST
-        port = REDIS_PORT
-        db = REDIS_DB
+        host = REDIS_HOST or "localhost"
+        port = REDIS_PORT if REDIS_PORT is not None else 6379
+        db = REDIS_DB if REDIS_DB is not None else 0
         url = f"redis://{host}:{port}/{db}"
         try:
-            return RedisSaver.from_conn_string(url)
+            saver = RedisSaver.from_conn_string(url)
+            if hasattr(saver, "__enter__"):
+                self._redis_ctx = saver
+                saver = saver.__enter__()
+            if hasattr(saver, "setup"):
+                saver.setup()
+            return saver
         except Exception as exc:
             log.warning("Redis checkpointer init failed, using MemorySaver: %s", exc)
             return MemorySaver()
