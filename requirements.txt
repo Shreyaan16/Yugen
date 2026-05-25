@@ -28,3 +28,4 @@ langchain
 langgraph
 rapidfuzz
 langchain-google-genai
+redis

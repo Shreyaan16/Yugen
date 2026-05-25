@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -17,3 +16,9 @@ TOP_K_SIMILAR = 10
 UNKNOWN_GENRE_ID = 0
 ALL_ANIME_DEFAULT_LIMIT = 50
 ALL_ANIME_MAX_LIMIT = 200
+
+
+################# REDIS CONSTANTS ###############
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+REDIS_DB = int(os.getenv("REDIS_DB"))
