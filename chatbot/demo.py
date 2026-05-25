@@ -26,9 +26,7 @@ def run_demo() -> None:
     print(f"Session started  →  thread_id = {thread_id}")
 
     turns = [
-        "Tell me about Fullmetal Alchemist Brotherhood",
-        "Who are the main characters?",           # agent should remember context
-        "Recommend something similar to it",
+        "hi"
     ]
 
     for msg in turns:

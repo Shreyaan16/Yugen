@@ -1,0 +1,183 @@
+schema: '2.0'
+stages:
+  loading:
+    cmd: python -m ingestion.pipeline.loading_pipeline
+    deps:
+    - path: ingestion/components/loading.py
+      hash: md5
+      md5: 12974a778880d4d3210a55a430c29a42
+      size: 3999
+    - path: ingestion/entity/config_entity.py
+      hash: md5
+      md5: bb385fac953506e9bcefe42355c9dae2
+      size: 641
+    outs:
+    - path: artifacts/.loading_manifest.json
+      hash: md5
+      md5: 9ea88c2cf97f3d3f8e12c521cc7dc030
+      size: 340
+  data_ingestion:
+    cmd: python -m ingestion.pipeline.ingestion_pipeline
+    deps:
+    - path: artifacts/.loading_manifest.json
+      hash: md5
+      md5: 9ea88c2cf97f3d3f8e12c521cc7dc030
+      size: 340
+    - path: ingestion/components/data_ingestion.py
+      hash: md5
+      md5: 540a822ba523d851bbf744c953cad36c
+      size: 1519
+    - path: ingestion/entity/config_entity.py
+      hash: md5
+      md5: bb385fac953506e9bcefe42355c9dae2
+      size: 641
+    outs:
+    - path: artifacts/data_ingestion
+      hash: md5
+      md5: f9e9f22dc9587ff65b6caea959dd27e9.dir
+      size: 902413384
+      nfiles: 12
+  data_preprocessing:
+    cmd: python -m ingestion.pipeline.preprocessing_pipeline
+    deps:
+    - path: artifacts/data_ingestion
+      hash: md5
+      md5: f9e9f22dc9587ff65b6caea959dd27e9.dir
+      size: 902413384
+      nfiles: 12
+    - path: ingestion/components/data_preprocessing.py
+      hash: md5
+      md5: f3965a821eda727c63386dc80e3adb82
+      size: 3662
+    - path: ingestion/config/cols_to_drop.yaml
+      hash: md5
+      md5: 50b86cff1fe202058a9b47c7ab1097a2
+      size: 137
+    - path: ingestion/config/feature_bins.yaml
+      hash: md5
+      md5: 9912eab0cabb8719003c6be4183d4766
+      size: 398
+    outs:
+    - path: artifacts/data_preprocessing
+      hash: md5
+      md5: ccf2a30639ce6a478c425ef8647b5ca2.dir
+      size: 873565013
+      nfiles: 4
+  recommender_train:
+    cmd: python -m recommender.pipeline.training_pipeline
+    deps:
+    - path: artifacts/data_preprocessing
+      hash: md5
+      md5: ccf2a30639ce6a478c425ef8647b5ca2.dir
+      size: 873565013
+      nfiles: 4
+    - path: params.yaml
+      hash: md5
+      md5: c9aee1605e51d753c4f36f3c9722be71
+      size: 685
+    - path: recommender/components/content_based.py
+      hash: md5
+      md5: c2e0fcedb3d3099c7409608ae37176df
+      size: 6003
+    - path: recommender/pipeline/training_pipeline.py
+      hash: md5
+      md5: ee5de5d151a052376d727918b47350f0
+      size: 2132
+    params:
+      params.yaml:
+        content_based:
+          max_features: 20000
+          ngram_range:
+          - 1
+          - 2
+          min_df: 2
+    outs:
+    - path: artifacts/recommender
+      hash: md5
+      md5: da609ac5f041e65938af3ba1e0f529e9.dir
+      size: 1304080427
+      nfiles: 4
+  recommender_eval:
+    cmd: python -m recommender.pipeline.evaluation_pipeline
+    deps:
+    - path: artifacts/data_preprocessing
+      hash: md5
+      md5: ccf2a30639ce6a478c425ef8647b5ca2.dir
+      size: 873565013
+      nfiles: 4
+    - path: artifacts/recommender
+      hash: md5
+      md5: da609ac5f041e65938af3ba1e0f529e9.dir
+      size: 1304080427
+      nfiles: 4
+    - path: params.yaml
+      hash: md5
+      md5: c9aee1605e51d753c4f36f3c9722be71
+      size: 685
+    - path: recommender/components/evaluation.py
+      hash: md5
+      md5: ea72767e325be1482cdeb8501aeebbcd
+      size: 10769
+    - path: recommender/pipeline/evaluation_pipeline.py
+      hash: md5
+      md5: 21d11a3aa18053df51276c0fd6e53623
+      size: 514
+    params:
+      params.yaml:
+        evaluation:
+          top_k: 10
+          random_state: 42
+          content:
+            sample_anime: 500
+          hybrid:
+            liked_threshold: 7.0
+            n_users_sample: 20
+            min_user_ratings: 20
+    outs:
+    - path: artifacts/evaluation
+      hash: md5
+      md5: 3f670a4c76ffddb00367e92acc14df0b.dir
+      size: 348
+      nfiles: 3
+  chatbot:
+    cmd: python -m chatbot.demo
+    deps:
+    - path: artifacts/data_preprocessing/anime.csv
+      hash: md5
+      md5: 664150dad6bd266df05ff3e43e496ff4
+      size: 8653177
+    - path: chatbot/
+      hash: md5
+      md5: b3b9f9c34b4dbf842bd4c82268ed3e21.dir
+      size: 65744
+      nfiles: 18
+    - path: ingestion/config/feature_bins.yaml
+      hash: md5
+      md5: 9912eab0cabb8719003c6be4183d4766
+      size: 398
+    - path: params.yaml
+      hash: md5
+      md5: c9aee1605e51d753c4f36f3c9722be71
+      size: 685
+    params:
+      params.yaml:
+        chatbot:
+          model: gemini-2.5-flash
+          fuzzy_search:
+            top_n: 5
+            min_score: 60
+            ambiguous_delta: 5
+          similarity_search:
+            k: 10
+          web_search:
+            max_results: 5
+            search_depth: basic
+            include_domains:
+            - myanimelist.net
+            - anilist.co
+            - anime-planet.com
+            - animenewsnetwork.com
+            - crunchyroll.com
+            - fandom.com
+          memory:
+            max_tokens: 8000

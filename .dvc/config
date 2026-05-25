@@ -1,0 +1,4 @@
+[core]
+    remote = my_local_remote
+['remote "my_local_remote"']
+    url = C:\Users\Shreyaan\Desktop\coding\python\aiml\mlops\udemy-course\section-2\YuGen\dvc_remote
