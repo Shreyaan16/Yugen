@@ -45,8 +45,13 @@ export default function AuthPanel() {
         setOpen(false);
       } else {
         await registerUser({ username: fields.username.trim(), email: fields.email.trim(), password: fields.password });
-        setMessage("Account created — you can log in now.");
-        setMode("login");
+        // Auto-login immediately after registration
+        const res = await loginUser({ email: fields.email.trim(), password: fields.password });
+        localStorage.setItem("auth_token", res.access_token);
+        if (res.chatbot_session_id) localStorage.setItem("chat_thread_id", res.chatbot_session_id);
+        setToken(res.access_token);
+        emit();
+        setOpen(false);
       }
       setFields({ username: "", email: "", password: "" });
     } catch (err) {
