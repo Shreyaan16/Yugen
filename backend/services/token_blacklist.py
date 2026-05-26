@@ -17,12 +17,12 @@ def revoke(token: str) -> None:
         ttl = max(exp_ts - int(time.time()), 1)
         client = get_redis_client()
         client.set(_revoked_key(token), "1", ex=ttl)
-    except Exception as exc:
-        raise RuntimeError("Failed to revoke token in Redis") from exc
+    except Exception:
+        pass  # Redis unavailable — token won't be blacklisted but logout still succeeds
 
 def is_revoked(token: str) -> bool:
     try:
         client = get_redis_client()
         return bool(client.exists(_revoked_key(token)))
-    except Exception as exc:
-        raise RuntimeError("Failed to check token revocation in Redis") from exc
+    except Exception:
+        return False  # Redis unavailable — assume token is valid

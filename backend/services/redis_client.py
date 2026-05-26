@@ -10,9 +10,10 @@ def get_redis_client() -> redis.Redis:
     host = REDIS_HOST
     port = REDIS_PORT
     db = REDIS_DB
-    _redis_client = redis.Redis(host=host, port=port, db=db, decode_responses=True)
+    client = redis.Redis(host=host, port=port, db=db, decode_responses=True)
     try:
-        _redis_client.ping()
+        client.ping()
     except Exception as exc:
         raise RuntimeError("Failed to connect to Redis") from exc
+    _redis_client = client
     return _redis_client

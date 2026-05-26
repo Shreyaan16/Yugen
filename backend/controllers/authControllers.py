@@ -24,9 +24,11 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def register_user(user: RegisterSchema, db: Session) -> dict:
-    # 1. Email uniqueness check
+    # 1. Uniqueness checks
     if db.query(User).filter(User.email == user.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
+    if db.query(User).filter(User.username == user.username).first():
+        raise HTTPException(status_code=400, detail="Username already taken")
     # 2. Global top-K popular anime as the initial recommendation
     top_anime = db.execute(
         text(
