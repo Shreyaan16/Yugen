@@ -2,13 +2,12 @@ from fastapi import APIRouter, Depends, Security
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from backend.database import Base, engine, get_db
+from backend.database import get_db
 from backend.utils import required_bearer
 from backend.controllers.authControllers import register_user, login_user, logout_user
 from backend.models.authModels import RegisterSchema, LoginSchema, LogoutScheme
 
 router = APIRouter()
-Base.metadata.create_all(bind=engine)
 
 @router.post("/register")
 def register(user: RegisterSchema, db: Session = Depends(get_db)):
