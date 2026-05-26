@@ -1,17 +1,18 @@
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 from backend.models.userModels import UserProfileResponse, RatedAnimeResponse
+from backend.models.authModels import User
 from backend.services.store import store
 from backend.utils import _parse_list
 
-def get_user_profile(user_id: int) -> UserProfileResponse:
-    row = store.user_df[store.user_df["user_id"] == user_id]
-    if row.empty:
+def get_user_profile(user_id: int, db: Session) -> UserProfileResponse:
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    user = row.iloc[0]
     return UserProfileResponse(
-        user_id=int(user["user_id"]),
-        username=str(user["username"]),
-        email=str(user["email"]),
+        user_id=user.user_id,
+        username=user.username,
+        email=user.email,
     )
 
 

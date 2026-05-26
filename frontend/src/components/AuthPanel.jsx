@@ -14,6 +14,12 @@ export default function AuthPanel() {
   const [fields, setFields] = useState({ username: "", email: "", password: "" });
   const [token, setToken]   = useState(() => localStorage.getItem("auth_token") || "");
 
+  function openAs(m) {
+    setMode(m);
+    setError("");
+    setOpen(true);
+  }
+
   useEffect(() => {
     function sync() { setToken(localStorage.getItem("auth_token") || ""); }
     window.addEventListener(AUTH_EVENT, sync);
@@ -82,14 +88,17 @@ export default function AuthPanel() {
           </Link>
           <button className="ghost-btn" onClick={handleLogout}>Logout</button>
         </div>
+      ) : open ? (
+        <button className="ghost-btn" onClick={() => setOpen(false)}>✕ Close</button>
       ) : (
-        <button className="auth-toggle" onClick={() => setOpen((v) => !v)}>
-          {open ? "Close" : "Login"}
-        </button>
+        <div className="auth-btns">
+          <button className="auth-toggle" onClick={() => openAs("login")}>Login</button>
+          <button className="auth-toggle auth-toggle--register" onClick={() => openAs("register")}>Register</button>
+        </div>
       )}
 
       {open && !token && (
-        <div className="auth-panel">
+        <div className="auth-panel" onMouseDown={(e) => e.stopPropagation()}>
           <div className="auth-tabs">
             <button className={mode === "login" ? "tab-btn active" : "tab-btn"} onClick={() => { setMode("login"); setError(""); }}>Login</button>
             <button className={mode === "register" ? "tab-btn active" : "tab-btn"} onClick={() => { setMode("register"); setError(""); }}>Register</button>
@@ -112,7 +121,7 @@ export default function AuthPanel() {
             {error   && <div className="form-error">{error}</div>}
             {message && <div className="form-message">{message}</div>}
             <button className="primary-btn" type="submit" disabled={loading}>
-              {loading ? "Please wait…" : mode === "login" ? "Login" : "Create account"}
+              {loading ? "Please wait…" : mode === "login" ? "Login" : "Press Enter to Register"}
             </button>
           </form>
         </div>
