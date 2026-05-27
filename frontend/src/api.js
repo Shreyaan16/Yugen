@@ -90,3 +90,11 @@ export async function fetchMyRatings(token) {
     headers: buildHeaders(token),
   }));
 }
+
+export async function rateAnime(animeId, rating, token) {
+  return handleJson(await fetch(`${API_BASE}/anime/${animeId}/rate`, {
+    method: "POST",
+    headers: buildHeaders(token),
+    body: JSON.stringify({ rating }),
+  }));
+}

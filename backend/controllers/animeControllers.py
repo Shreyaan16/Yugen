@@ -14,7 +14,7 @@ from recommender.constants import (
     ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME,
     USER_ANIME_RATINGS_FILE_NAME, RATINGS_FILE_NAME,
 )
-from sqlalchemy import func as sa_func
+from sqlalchemy import func as sa_func, text
 
 _ratings_lock = threading.Lock()
 _UAR_CSV  = os.path.join(ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, USER_ANIME_RATINGS_FILE_NAME)
@@ -99,35 +99,35 @@ def rate_anime(anime_id: int, rating: int, user_id: int, db: Session) -> dict:
     if store.anime_df[store.anime_df["anime_id"] == anime_id].empty:
         raise HTTPException(status_code=404, detail="Anime not found")
 
-    # 2. Upsert into Postgres user_ratings table
-    existing = (
-        db.query(UserRating)
-        .filter(UserRating.user_id == user_id, UserRating.anime_id == anime_id)
-        .first()
+    # 2. Upsert into user_anime_ratings.
+    #    The table was imported from CSV so it likely has no unique constraint on
+    #    (user_id, anime_id) — ON CONFLICT would fail.  DELETE + INSERT is safe
+    #    in all cases and leaves exactly one row per user-anime pair.
+    db.execute(
+        text("DELETE FROM user_anime_ratings WHERE user_id = :u AND anime_id = :a"),
+        {"u": user_id, "a": anime_id},
     )
-    if existing:
-        existing.rating = rating
-        action = "updated"
-    else:
-        db.add(UserRating(user_id=user_id, anime_id=anime_id, rating=rating))
-        action = "created"
+    db.execute(
+        text("INSERT INTO user_anime_ratings (user_id, anime_id, rating) VALUES (:u, :a, :r)"),
+        {"u": user_id, "a": anime_id, "r": rating},
+    )
     db.commit()
 
-    # 3. Recalculate aggregate stats for this anime from user_ratings
-    agg = (
-        db.query(
-            sa_func.count(UserRating.rating).label("num_ratings"),
-            sa_func.avg(UserRating.rating).label("mean_rating"),
-        )
-        .filter(UserRating.anime_id == anime_id)
-        .one()
-    )
-    new_num   = int(agg.num_ratings)
-    new_mean  = float(agg.mean_rating)
+    # 3. Recalculate aggregate stats from user_anime_ratings
+    agg = db.execute(
+        text("""
+            SELECT COUNT(*) AS num_ratings, AVG(rating::float) AS mean_rating
+            FROM user_anime_ratings
+            WHERE anime_id = :anime_id
+        """),
+        {"anime_id": anime_id},
+    ).one()
+    new_num  = int(agg.num_ratings)
+    new_mean = float(agg.mean_rating)
 
     # Bayesian average: score = (v*R + m*C) / (v+m)
-    # C = weighted global mean across all anime (sum(v*R)/sum(v)) from the stat CSV
-    stat_df   = store.hybrid._ratings_df
+    # C = weighted global mean = Σ(v*R) / Σv  across all anime
+    stat_df = store.hybrid._ratings_df
     if not stat_df.empty and "num_ratings" in stat_df.columns:
         total_votes = stat_df["num_ratings"].sum()
         C = float((stat_df["num_ratings"] * stat_df["mean_rating"]).sum() / total_votes) if total_votes else new_mean
@@ -135,25 +135,33 @@ def rate_anime(anime_id: int, rating: int, user_id: int, db: Session) -> dict:
         C = new_mean
     new_score = (new_num * new_mean + _BAYES_M * C) / (new_num + _BAYES_M)
 
-    # 4. Upsert Postgres ratings table
-    stat_row = db.query(AnimeRating).filter(AnimeRating.anime_id == anime_id).first()
-    if stat_row:
-        stat_row.num_ratings      = new_num
-        stat_row.mean_rating      = new_mean
-        stat_row.popularity_score = new_score
-    else:
-        db.add(AnimeRating(
-            anime_id=anime_id,
-            num_ratings=new_num,
-            mean_rating=new_mean,
-            popularity_score=new_score,
-        ))
+    # 4. Upsert ratings aggregate table.
+    #    Table has no unique constraint (bulk-loaded from CSV), so ON CONFLICT
+    #    won't work.  UPDATE first; INSERT only when no row existed yet.
+    result = db.execute(
+        text("""
+            UPDATE ratings
+            SET num_ratings      = :n,
+                mean_rating      = :m,
+                popularity_score = :s
+            WHERE anime_id = :a
+        """),
+        {"a": anime_id, "n": new_num, "m": new_mean, "s": new_score},
+    )
+    if result.rowcount == 0:
+        db.execute(
+            text("""
+                INSERT INTO ratings (anime_id, num_ratings, mean_rating, popularity_score)
+                VALUES (:a, :n, :m, :s)
+            """),
+            {"a": anime_id, "n": new_num, "m": new_mean, "s": new_score},
+        )
     db.commit()
 
     # 5. Mirror all changes in-memory + write both CSVs under a single lock
     with _ratings_lock:
         # --- user_anime_ratings ---
-        uar = store.user_ratings_df
+        uar  = store.user_ratings_df
         mask = (uar["user_id"] == user_id) & (uar["anime_id"] == anime_id)
         if mask.any():
             store.user_ratings_df.loc[mask, "rating"] = rating
@@ -165,8 +173,8 @@ def rate_anime(anime_id: int, rating: int, user_id: int, db: Session) -> dict:
         store.user_ratings_df.to_csv(_UAR_CSV, index=False)
 
         # --- ratings (aggregate stats) ---
-        sdf  = store.hybrid._ratings_df
-        smask = sdf["anime_id"] == anime_id if not sdf.empty else pd.Series([], dtype=bool)
+        sdf   = store.hybrid._ratings_df
+        smask = (sdf["anime_id"] == anime_id) if not sdf.empty else pd.Series([], dtype=bool)
         if not sdf.empty and smask.any():
             store.hybrid._ratings_df.loc[smask, "num_ratings"]      = new_num
             store.hybrid._ratings_df.loc[smask, "mean_rating"]      = new_mean
@@ -174,11 +182,13 @@ def rate_anime(anime_id: int, rating: int, user_id: int, db: Session) -> dict:
         else:
             store.hybrid._ratings_df = pd.concat(
                 [sdf, pd.DataFrame([{
-                    "anime_id": anime_id, "num_ratings": new_num,
-                    "mean_rating": new_mean, "popularity_score": new_score,
+                    "anime_id":         anime_id,
+                    "num_ratings":      new_num,
+                    "mean_rating":      new_mean,
+                    "popularity_score": new_score,
                 }])],
                 ignore_index=True,
             )
         store.hybrid._ratings_df.to_csv(_STAT_CSV, index=False)
 
-    return {"message": f"Rating {action} successfully", "anime_id": anime_id, "rating": rating}
+    return {"message": "Rating saved successfully", "anime_id": anime_id, "rating": rating}

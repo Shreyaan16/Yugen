@@ -10,7 +10,7 @@ class User(Base):
     password = Column(String, nullable=False)
 
 class UserRating(Base):
-    __tablename__ = "user_ratings"
+    __tablename__ = "user_anime_ratings"
     user_id    = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
     anime_id   = Column(Integer, primary_key=True)
     rating     = Column(SmallInteger, nullable=False)
