@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, SmallInteger, ForeignKey, DateTime, func
+from sqlalchemy import Column, Integer, String, SmallInteger, Float, ForeignKey, DateTime, func
 from pydantic import BaseModel, EmailStr, conint
 from backend.database import Base
 
@@ -15,6 +15,13 @@ class UserRating(Base):
     anime_id   = Column(Integer, primary_key=True)
     rating     = Column(SmallInteger, nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class AnimeRating(Base):
+    __tablename__ = "ratings"
+    anime_id         = Column(Integer, primary_key=True)
+    num_ratings      = Column(Integer,  nullable=False)
+    mean_rating      = Column(Float,    nullable=False)
+    popularity_score = Column(Float,    nullable=False)
 
 class RegisterSchema(BaseModel):
     username: str

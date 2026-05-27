@@ -9,11 +9,19 @@ from backend.services.store import store
 from sqlalchemy.orm import Session
 from backend.services import chat_history
 from backend.utils import to_card, clean
-from backend.models.authModels import UserRating
-from recommender.constants import ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, USER_ANIME_RATINGS_FILE_NAME
+from backend.models.authModels import UserRating, AnimeRating
+from recommender.constants import (
+    ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME,
+    USER_ANIME_RATINGS_FILE_NAME, RATINGS_FILE_NAME,
+)
+from sqlalchemy import func as sa_func
 
 _ratings_lock = threading.Lock()
-_CSV_PATH = os.path.join(ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, USER_ANIME_RATINGS_FILE_NAME)
+_UAR_CSV  = os.path.join(ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, USER_ANIME_RATINGS_FILE_NAME)
+_STAT_CSV = os.path.join(ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, RATINGS_FILE_NAME)
+
+# Bayesian-average damping constant (reverse-engineered from dataset, m ≈ 50)
+_BAYES_M = 50
 
 log = logging.getLogger(__name__)
 
@@ -105,18 +113,72 @@ def rate_anime(anime_id: int, rating: int, user_id: int, db: Session) -> dict:
         action = "created"
     db.commit()
 
-    # 3. Mirror change in the in-memory DataFrame + CSV (so profile page reflects
-    #    new ratings immediately without waiting for a full retrain/reload)
+    # 3. Recalculate aggregate stats for this anime from user_ratings
+    agg = (
+        db.query(
+            sa_func.count(UserRating.rating).label("num_ratings"),
+            sa_func.avg(UserRating.rating).label("mean_rating"),
+        )
+        .filter(UserRating.anime_id == anime_id)
+        .one()
+    )
+    new_num   = int(agg.num_ratings)
+    new_mean  = float(agg.mean_rating)
+
+    # Bayesian average: score = (v*R + m*C) / (v+m)
+    # C = weighted global mean across all anime (sum(v*R)/sum(v)) from the stat CSV
+    stat_df   = store.hybrid._ratings_df
+    if not stat_df.empty and "num_ratings" in stat_df.columns:
+        total_votes = stat_df["num_ratings"].sum()
+        C = float((stat_df["num_ratings"] * stat_df["mean_rating"]).sum() / total_votes) if total_votes else new_mean
+    else:
+        C = new_mean
+    new_score = (new_num * new_mean + _BAYES_M * C) / (new_num + _BAYES_M)
+
+    # 4. Upsert Postgres ratings table
+    stat_row = db.query(AnimeRating).filter(AnimeRating.anime_id == anime_id).first()
+    if stat_row:
+        stat_row.num_ratings      = new_num
+        stat_row.mean_rating      = new_mean
+        stat_row.popularity_score = new_score
+    else:
+        db.add(AnimeRating(
+            anime_id=anime_id,
+            num_ratings=new_num,
+            mean_rating=new_mean,
+            popularity_score=new_score,
+        ))
+    db.commit()
+
+    # 5. Mirror all changes in-memory + write both CSVs under a single lock
     with _ratings_lock:
-        df = store.user_ratings_df
-        mask = (df["user_id"] == user_id) & (df["anime_id"] == anime_id)
+        # --- user_anime_ratings ---
+        uar = store.user_ratings_df
+        mask = (uar["user_id"] == user_id) & (uar["anime_id"] == anime_id)
         if mask.any():
             store.user_ratings_df.loc[mask, "rating"] = rating
         else:
-            new_row = pd.DataFrame([{"user_id": user_id, "anime_id": anime_id, "rating": rating}])
             store.user_ratings_df = pd.concat(
-                [store.user_ratings_df, new_row], ignore_index=True
+                [uar, pd.DataFrame([{"user_id": user_id, "anime_id": anime_id, "rating": rating}])],
+                ignore_index=True,
             )
-        store.user_ratings_df.to_csv(_CSV_PATH, index=False)
+        store.user_ratings_df.to_csv(_UAR_CSV, index=False)
+
+        # --- ratings (aggregate stats) ---
+        sdf  = store.hybrid._ratings_df
+        smask = sdf["anime_id"] == anime_id if not sdf.empty else pd.Series([], dtype=bool)
+        if not sdf.empty and smask.any():
+            store.hybrid._ratings_df.loc[smask, "num_ratings"]      = new_num
+            store.hybrid._ratings_df.loc[smask, "mean_rating"]      = new_mean
+            store.hybrid._ratings_df.loc[smask, "popularity_score"] = new_score
+        else:
+            store.hybrid._ratings_df = pd.concat(
+                [sdf, pd.DataFrame([{
+                    "anime_id": anime_id, "num_ratings": new_num,
+                    "mean_rating": new_mean, "popularity_score": new_score,
+                }])],
+                ignore_index=True,
+            )
+        store.hybrid._ratings_df.to_csv(_STAT_CSV, index=False)
 
     return {"message": f"Rating {action} successfully", "anime_id": anime_id, "rating": rating}
