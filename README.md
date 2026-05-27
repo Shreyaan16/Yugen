@@ -7,9 +7,11 @@ YuGen is a full-stack anime discovery and recommendation platform. Browse thousa
 ## Table of Contents
 
 - [How the App Works](#how-the-app-works)
+- [Rating System](#rating-system)
 - [Recommender System](#recommender-system)
 - [Redis — What It Stores](#redis--what-it-stores)
 - [Running with Docker (Quick Start)](#running-with-docker-quick-start)
+- [CI/CD](#cicd)
 - [DVC Pipeline](#dvc-pipeline)
 - [Project Structure](#project-structure)
 - [Environment Variables](#environment-variables)
@@ -38,9 +40,70 @@ YuGen is a full-stack anime discovery and recommendation platform. Browse thousa
 
 - **Browse** — infinite scroll catalog of anime, filterable by title and genre. Data served from a preprocessed CSV baked into the API image.
 - **Anime detail** — synopsis, stats (favorites, watching, completed), genres, studios, producers.
+- **Rate** — logged-in users can rate any anime 1–10 directly from the detail page. Ratings are persisted immediately.
 - **Recommendations** — logged-in users get hybrid personalised picks; guests get content-based similar anime.
 - **Auth** — JWT-based register / login / logout. Tokens are revoked via Redis on logout.
 - **Chatbot** — bottom-right AI assistant powered by Gemini with tool use (fuzzy search, FAISS similarity, web search via Tavily).
+
+---
+
+## Rating System
+
+Logged-in users can rate any anime on a **1–10 scale** from the anime detail page. A single `POST /anime/{id}/rate` call triggers a four-step write:
+
+```
+POST /anime/{anime_id}/rate  { "rating": 8 }
+         │
+         ▼
+1. DELETE + INSERT into user_anime_ratings   ← individual user score
+         │
+         ▼
+2. COUNT + AVG from user_anime_ratings       ← recalculate aggregate stats
+         │
+         ▼
+3. UPDATE ratings table                      ← num_ratings, mean_rating, popularity_score
+         │
+         ▼
+4. Mirror both changes to in-memory DataFrames + rewrite both CSVs
+```
+
+### Why four steps?
+
+| What | Why |
+|---|---|
+| `user_anime_ratings` table | Source of truth for individual scores; used by the hybrid recommender on retrain |
+| `ratings` table | Aggregate stats (num_ratings, mean_rating, popularity_score) used for popularity ranking and the recommender reliability filter |
+| In-memory DataFrames | `store.user_ratings_df` and `store.hybrid._ratings_df` are read on every request — updating them live means the **profile page and recommender see new ratings instantly** without a restart |
+| CSV files | `artifacts/data_preprocessing/user_anime_ratings.csv` and `ratings.csv` are the inputs to the DVC pipeline — rewriting them means the **next `dvc repro` retrains on up-to-date data automatically** |
+
+### popularity_score formula
+
+Scores use a **Bayesian average** (same formula as IMDB) to prevent anime with very few ratings from unfairly dominating popularity rankings:
+
+```
+popularity_score = (v × R  +  m × C) / (v + m)
+
+  v  =  num_ratings for this anime
+  R  =  mean_rating for this anime
+  m  =  50  (damping constant, reverse-engineered from dataset)
+  C  =  Σ(v × R) / Σv  — weighted global mean across all anime
+```
+
+With a large `v`, the score converges to the actual mean. With a tiny `v`, it pulls toward the global average, so obscure anime can't rank above well-rated popular ones just from a handful of 10/10 votes.
+
+### Endpoint
+
+```
+POST /anime/{anime_id}/rate
+Authorization: Bearer <token>   ← required; 401 if missing or expired
+Body: { "rating": <1–10> }
+```
+
+Returns `{ "message": "Rating saved successfully", "anime_id": ..., "rating": ... }`.
+
+### Frontend
+
+On the anime detail page, logged-in users see a **1–10 number bar** below the genre chips. The bar is pre-highlighted with their existing rating on page load (fetched in parallel with the anime detail). Hovering lights up buttons left-to-right; clicking submits immediately and shows a "Rating saved!" confirmation.
 
 ---
 
@@ -190,6 +253,35 @@ The postgres and redis containers start automatically. On first run, tables are 
 
 ---
 
+## CI/CD
+
+Every push to `main` triggers a GitHub Actions workflow (`.github/workflows/docker-publish.yml`) that builds and pushes both Docker images to Docker Hub in **parallel**.
+
+```
+push to main
+      │
+      ├─── job: backend  ──▶  docker build .               ──▶  shreyaan16/yugen-api:latest
+      │                                                          shreyaan16/yugen-api:<sha>
+      │
+      └─── job: frontend ──▶  docker build ./frontend      ──▶  shreyaan16/yugen-frontend:latest
+                                                                 shreyaan16/yugen-frontend:<sha>
+```
+
+Each image is tagged with both `:latest` (for easy `docker pull`) and the full commit SHA (for precise rollbacks).  
+Layer caching (`type=gha`) is enabled — unchanged layers (pip installs, npm installs) are reused across runs.
+
+### Required GitHub Secrets
+
+Go to **Settings → Secrets and variables → Actions** and add:
+
+| Secret | Value |
+|---|---|
+| `DOCKERHUB_USERNAME` | Your Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token *(Account Settings → Security → New Access Token)* |
+| `VITE_API_BASE_URL` | Public URL of your API, e.g. `http://your-server:8000` *(leave empty to keep the `localhost:8000` default)* |
+
+---
+
 ## DVC Pipeline
 
 DVC manages the ML training pipeline. It tracks which stages need re-running based on file and parameter changes — skipping expensive stages when nothing has changed.
@@ -252,8 +344,18 @@ dvc repro --force recommender_train
 
 #### After retraining — rebuild and push the Docker image
 
+Commit the updated artifacts and push to `main` — the CI/CD pipeline will rebuild and push the Docker image automatically.
+
 ```bash
-docker-compose build
+git add artifacts/
+git commit -m "retrain: updated recommender artifacts"
+git push origin main
+```
+
+Or rebuild manually:
+
+```bash
+docker-compose build api
 docker push shreyaan16/yugen-api:latest
 ```
 

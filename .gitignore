@@ -8,3 +8,4 @@ artifacts/
 mlruns/
 node_modules/
 dvc_remote/
+.github

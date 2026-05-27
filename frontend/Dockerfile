@@ -7,6 +7,11 @@ RUN npm install
 
 COPY . /app
 
+# Injected by CI via --build-arg; falls back to empty string so the
+# runtime default in api.js (http://localhost:8000) is used instead.
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 RUN npm run build
 
 FROM nginx:1.27-alpine
