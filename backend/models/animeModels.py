@@ -1,10 +1,13 @@
 from __future__ import annotations
 from typing import Any
-from pydantic import BaseModel
+from pydantic import BaseModel, conint
 
 class ChatScheme(BaseModel):
     message:   str
     thread_id: str | None = None
+
+class RateBody(BaseModel):
+    rating: conint(ge=1, le=10)
 
 class AnimeCardResponse(BaseModel):
     """Card shown in list / similar-anime views."""

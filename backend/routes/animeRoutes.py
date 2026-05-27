@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+from backend.database import get_db
 from backend.models.animeModels import *
 from backend.constants import ALL_ANIME_DEFAULT_LIMIT
-from backend.utils import get_optional_user
+from backend.utils import get_optional_user, get_current_user
 from backend.controllers.animeControllers import *
 
 router = APIRouter()
@@ -53,3 +55,18 @@ def chat_history(thread_id: str):
     Each entry has role ('human' | 'ai' | 'tool') and content.
     """
     return get_chat_history(thread_id)
+
+
+@router.post("/anime/{anime_id}/rate")
+def submit_rating(
+    anime_id: int,
+    body: RateBody,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submit or update a rating (1–10) for an anime.
+    Requires authentication. Upserts in Postgres and syncs to the
+    preprocessed CSV so the profile page reflects the change immediately.
+    """
+    return rate_anime(anime_id=anime_id, rating=body.rating, user_id=user_id, db=db)

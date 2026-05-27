@@ -1,10 +1,19 @@
+import os
 import time
 import logging
+import threading
+import pandas as pd
 from fastapi import HTTPException
 from backend.constants import ALL_ANIME_DEFAULT_LIMIT, ALL_ANIME_MAX_LIMIT, TOP_K_SIMILAR
 from backend.services.store import store
+from sqlalchemy.orm import Session
 from backend.services import chat_history
 from backend.utils import to_card, clean
+from backend.models.authModels import UserRating
+from recommender.constants import ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, USER_ANIME_RATINGS_FILE_NAME
+
+_ratings_lock = threading.Lock()
+_CSV_PATH = os.path.join(ARTIFACT_DIR, DATA_PREPROCESSING_DIR_NAME, USER_ANIME_RATINGS_FILE_NAME)
 
 log = logging.getLogger(__name__)
 
@@ -76,3 +85,38 @@ def get_chat_history(thread_id: str) -> list[dict]:
         raise HTTPException(status_code=503, detail="Chatbot unavailable: recommender artifacts not yet trained")
     history = chat_history.get_history(thread_id)
     return history if history else store.agent.get_history(thread_id)
+
+def rate_anime(anime_id: int, rating: int, user_id: int, db: Session) -> dict:
+    # 1. Confirm the anime exists in our catalogue
+    if store.anime_df[store.anime_df["anime_id"] == anime_id].empty:
+        raise HTTPException(status_code=404, detail="Anime not found")
+
+    # 2. Upsert into Postgres user_ratings table
+    existing = (
+        db.query(UserRating)
+        .filter(UserRating.user_id == user_id, UserRating.anime_id == anime_id)
+        .first()
+    )
+    if existing:
+        existing.rating = rating
+        action = "updated"
+    else:
+        db.add(UserRating(user_id=user_id, anime_id=anime_id, rating=rating))
+        action = "created"
+    db.commit()
+
+    # 3. Mirror change in the in-memory DataFrame + CSV (so profile page reflects
+    #    new ratings immediately without waiting for a full retrain/reload)
+    with _ratings_lock:
+        df = store.user_ratings_df
+        mask = (df["user_id"] == user_id) & (df["anime_id"] == anime_id)
+        if mask.any():
+            store.user_ratings_df.loc[mask, "rating"] = rating
+        else:
+            new_row = pd.DataFrame([{"user_id": user_id, "anime_id": anime_id, "rating": rating}])
+            store.user_ratings_df = pd.concat(
+                [store.user_ratings_df, new_row], ignore_index=True
+            )
+        store.user_ratings_df.to_csv(_CSV_PATH, index=False)
+
+    return {"message": f"Rating {action} successfully", "anime_id": anime_id, "rating": rating}
